@@ -1,32 +1,69 @@
 import { Box, Card, Chip, Typography } from "@mui/material";
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-function createLiveSnapshot() {
-  const healthy = 108 + Math.floor(Math.random() * 10);
-  const refill = 18 + Math.floor(Math.random() * 8);
-  const critical = 5 + Math.floor(Math.random() * 5);
-  const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return {
-    healthData: [{ name: "Healthy", value: healthy, color: "#16A34A" }, { name: "Refill soon", value: refill, color: "#F59E0B" }, { name: "Critical", value: critical, color: "#DC2626" }],
-    trendData: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => ({ day, cash: 110 + Math.floor(Math.random() * 170) })),
-    queue: ["ATM-034", "ATM-089", "ATM-112"].map((id, index) => ({ id, location: ["Connaught Place", "Rajiv Chowk", "Barakhamba Road"][index], status: index < 2 ? "Critical" : "Refill soon", level: `${15 + Math.floor(Math.random() * 28)}%`, color: index < 2 ? "critical" : "warning" })),
-    activity: [["ATM-021", "Cash replenished", now, "R. Mehta"], ["ATM-177", "Health check passed", now, "Auto-monitor"], ["ATM-034", "Low cash alert", now, "Unassigned"]],
-    monitored: 2420 + Math.floor(Math.random() * 61),
-    availability: (97.5 + Math.random() * 1.4).toFixed(1),
-    withdrawals: (16 + Math.random() * 4).toFixed(1),
-  };
-}
+type DashboardSnapshot = {
+  updatedAt: string;
+  healthData: Array<{ name: string; value: number; color: string }>;
+  trendData: Array<{ day: string; cash: number }>;
+  queue: Array<{ id: string; location: string; status: string; level: string; color: string }>;
+  activity: string[][];
+  monitored: number;
+  availability: string;
+  withdrawals: string;
+};
+
+const emptySnapshot: DashboardSnapshot = {
+  updatedAt: "",
+  healthData: [],
+  trendData: [],
+  queue: [],
+  activity: [],
+  monitored: 0,
+  availability: "0.0",
+  withdrawals: "0.0",
+};
 
 export default function BankerDashboard() {
-  const [snapshot, setSnapshot] = useState(createLiveSnapshot);
+  const navigate = useNavigate();
+  const [snapshot, setSnapshot] = useState(emptySnapshot);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    const intervalId = window.setInterval(() => setSnapshot(createLiveSnapshot()), 10000);
+    const loadDashboard = async () => {
+      try {
+        const token = localStorage.getItem("cashready_token") ?? sessionStorage.getItem("cashready_token");
+        const response = await fetch("/api/banker/dashboard", {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        const data: { dashboard?: DashboardSnapshot; error?: string } = await response.json();
+        if (response.status === 401) {
+          localStorage.removeItem("cashready_token");
+          localStorage.removeItem("cashready_role");
+          sessionStorage.removeItem("cashready_token");
+          navigate("/login/banker");
+          return;
+        }
+        if (!response.ok || !data.dashboard) throw new Error(data.error ?? "Unable to load dashboard");
+        setSnapshot(data.dashboard);
+        setError("");
+      } catch (dashboardError) {
+        setError(dashboardError instanceof Error ? dashboardError.message : "Unable to load dashboard");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    void loadDashboard();
+    const intervalId = window.setInterval(() => void loadDashboard(), 10000);
     return () => window.clearInterval(intervalId);
-  }, []);
+  }, [navigate]);
 
   const { healthData, trendData, queue, activity } = snapshot;
+  if (isLoading) return <main className="development-page"><h1>Bank Analytics</h1><p className="page-subtitle">Loading live banking data...</p></main>;
+  if (error) return <main className="development-page"><h1>Bank Analytics</h1><p className="page-subtitle" role="alert">{error}</p></main>;
   return (
     <main className="analytics-page">
       <Box className="analytics-heading">

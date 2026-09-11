@@ -9,6 +9,7 @@ export default function Contact() {
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setSent(true);
+    window.setTimeout(() => setSent(false), 3500);
   };
 
   return (
@@ -35,6 +36,15 @@ export default function Contact() {
           {sent && <p className="form-success">Thanks. Our team will get back to you shortly.</p>}
         </form>
       </div>
+      {sent && (
+        <div className="success-toast" role="status" aria-live="polite">
+          <span className="success-toast-icon" aria-hidden="true">✓</span>
+          <span>
+            <strong>Message sent successfully</strong>
+            <small>Our team will get back to you shortly.</small>
+          </span>
+        </div>
+      )}
     </main>
   );
 }

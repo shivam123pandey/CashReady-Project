@@ -1,28 +1,90 @@
+import { useEffect, useState } from "react";
+import AccountBalanceRoundedIcon from "@mui/icons-material/AccountBalanceRounded";
 import { useLocation, useNavigate } from "react-router-dom";
 
 export default function SiteHeader() {
   const navigate = useNavigate();
   const location = useLocation();
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isBanker, setIsBanker] = useState(() => localStorage.getItem("cashready_role") === "banker");
+
+  useEffect(() => {
+    setLoginOpen(false);
+    setSearchQuery("");
+    setIsBanker(localStorage.getItem("cashready_role") === "banker");
+  }, [location.pathname]);
   const isActive = (paths: string[]) => paths.includes(location.pathname);
+  const searchOptions = [
+    { label: "ATM Locator", hint: "Find nearby ATMs", path: "/map" },
+    ...(isBanker ? [{ label: "Bank Analytics", hint: "Monitor ATM health", path: "/banker-dashboard" }] : []),
+    { label: "Operations Center & Reports", hint: "Review banking operations", path: "/operations-reports" },
+    { label: "Contact", hint: "Get in touch with CashReady", path: "/contact" },
+  ];
+  const matchingOptions = searchQuery.trim()
+    ? searchOptions.filter((option) => `${option.label} ${option.hint}`.toLowerCase().includes(searchQuery.trim().toLowerCase()))
+    : [];
 
   return (
     <div className="site-header-shell">
       <header className="brand-header">
         <button className="brand-lockup" type="button" onClick={() => navigate("/")}>
-          <span className="brand-icon">♜</span><span>CashReady</span>
+          <span className="brand-icon" aria-hidden="true"><AccountBalanceRoundedIcon /></span>
+          <span className="brand-wordmark"><span>Cash</span>Ready</span>
         </button>
         <div className="site-search">
           <span>⌕</span>
-          <input aria-label="Search" placeholder="What are you looking for today?" />
+          <input
+            aria-label="Search"
+            placeholder="What are you looking for today?"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            onFocus={() => setSearchQuery((query) => query)}
+          />
+          {matchingOptions.length > 0 && (
+            <div className="search-dropdown">
+              {matchingOptions.map((option) => (
+                <button
+                  type="button"
+                  key={option.path}
+                  onClick={() => { setSearchQuery(""); navigate(option.path); }}
+                >
+                  <strong>{option.label}</strong>
+                  <small>{option.hint}</small>
+                </button>
+              ))}
+            </div>
+          )}
+          {searchQuery.trim() && matchingOptions.length === 0 && (
+            <div className="search-empty">No result found</div>
+          )}
         </div>
-        <button className="login-button" type="button" onClick={() => navigate("/home")}>Login</button>
+        <div className="login-menu">
+          <button
+            className="login-button"
+            type="button"
+            aria-expanded={loginOpen}
+            onClick={() => setLoginOpen((isOpen) => !isOpen)}
+          >
+            Login
+          </button>
+          {loginOpen && (
+            <div className="login-dropdown">
+              <button type="button" onClick={() => { setLoginOpen(false); navigate("/login/customer"); }}>
+                Login as Customer
+              </button>
+              <button type="button" onClick={() => { setLoginOpen(false); navigate("/login/banker"); }}>
+                Login as Banker
+              </button>
+            </div>
+          )}
+        </div>
       </header>
       <nav className="main-nav" aria-label="Main navigation">
         <button className={isActive(["/", "/home"]) ? "active" : ""} type="button" onClick={() => navigate("/home")}>Dashboard</button>
         <button className={isActive(["/map"]) ? "active" : ""} type="button" onClick={() => navigate("/map")}>ATM Locator</button>
-        <button className={isActive(["/banker-dashboard"]) ? "active" : ""} type="button" onClick={() => navigate("/banker-dashboard")}>Bank Analytics</button>
-        <button className={isActive(["/operations"]) ? "active" : ""} type="button" onClick={() => navigate("/operations")}>Operations Center</button>
-        <button className={isActive(["/reports"]) ? "active" : ""} type="button" onClick={() => navigate("/reports")}>Reports</button>
+        {isBanker && <button className={isActive(["/banker-dashboard"]) ? "active" : ""} type="button" onClick={() => navigate("/banker-dashboard")}>Bank Analytics</button>}
+        <button className={isActive(["/operations", "/reports", "/operations-reports"]) ? "active" : ""} type="button" onClick={() => navigate("/operations-reports")}>Operations Center &amp; Reports</button>
         <button className={isActive(["/contact"]) ? "active" : ""} type="button" onClick={() => navigate("/contact")}>Contact</button>
       </nav>
     </div>

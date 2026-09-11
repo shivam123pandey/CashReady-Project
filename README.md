@@ -6,13 +6,7 @@ The map uses OpenStreetMap for nearby ATM locations. Cash availability must come
 
 1. Copy `.env.example` to `.env`.
 2. Set `ATM_PROVIDER_URL` and `ATM_PROVIDER_API_KEY` from your provider.
-3. Start the API in one terminal:
-
-```bash
-npm run api
-```
-
-4. Start the frontend in another terminal:
+3. Start the frontend and API together:
 
 ```bash
 npm run dev
@@ -29,6 +23,17 @@ The provider endpoint should accept `latitude`, `longitude`, and `radius` query 
 ```
 
 Without a configured provider, the UI intentionally displays `Cash status unavailable`; it does not fabricate a cash balance.
+
+## Demo authentication
+
+The API seeds local demo accounts on first login:
+
+- Customer: `customer@cashready.test` / `Customer@123`
+- Banker: `banker@cashready.test` / `Banker@123`
+
+Login requests are handled by `POST /api/auth/login`. Passwords are stored as scrypt hashes in the ignored `server/data/users.json` file. Replace this local store with a managed database before production deployment.
+
+Banker analytics are loaded from `GET /api/banker/dashboard` using the bearer token returned by login. The endpoint only accepts users with the `banker` role and returns the KPI, cash trend, ATM health, replenishment queue, and recent activity data shown on the dashboard.
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 
