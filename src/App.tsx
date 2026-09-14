@@ -43,8 +43,14 @@ function App() {
 
         <Route path="/forecasting" element={<UnderDevelopment title="Cash Forecasting" />} />
         <Route path="/operations" element={<UnderDevelopment title="Operations Center & Reports" />} />
-        <Route path="/reports" element={<UnderDevelopment title="Operations Center & Reports" />} />
+        <Route path="/reports" element={<UnderDevelopment title="Reports" />} />
         <Route path="/operations-reports" element={<UnderDevelopment title="Operations Center & Reports" />} />
+        <Route path="/priority-queue" element={<UnderDevelopment title="Priority queue" pageKey="priority-queue" />} />
+        <Route path="/field-activity" element={<UnderDevelopment title="Field activity" pageKey="field-activity" />} />
+        <Route path="/network-alerts" element={<UnderDevelopment title="Network alerts" pageKey="network-alerts" />} />
+        <Route path="/daily-network-summary" element={<UnderDevelopment title="Daily network summary" pageKey="daily-network-summary" />} />
+        <Route path="/cash-movement-report" element={<UnderDevelopment title="Cash movement report" pageKey="cash-movement-report" />} />
+        <Route path="/export-center" element={<UnderDevelopment title="Export center" pageKey="export-center" />} />
 
         <Route path="/map" element={<MapView />} />
 

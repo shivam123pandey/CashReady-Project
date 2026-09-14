@@ -15,20 +15,45 @@ export default function Contact() {
   return (
     <main className="contact-page">
       <section className="contact-intro">
-        <p className="eyebrow">CASHREADY SUPPORT</p>
         <h1>How can we help?</h1>
         <p>Connect with our ATM operations team for platform support and banking questions.</p>
       </section>
       <div className="contact-grid">
         <section className="contact-details">
           <h2>Visit or reach us</h2>
-          <div><strong>Office</strong><span>CashReady Technologies<br />14th Floor, Meridian Business Tower<br />Sector 62, Noida, Uttar Pradesh 201309</span></div>
-          <div><strong>Phone</strong><span>+91 120 456 7890<br />Mon-Fri, 9:00 AM - 6:00 PM</span></div>
-          <div><strong>Email</strong><span>support@cashready.example<br />operations@cashready.example</span></div>
-          <button type="button" onClick={() => navigate("/")}>Return to CashReady</button>
+          <div className="contact-details-list">
+            <div className="contact-item">
+              <span className="contact-icon">📍</span>
+              <div className="contact-copy">
+                <strong>Office</strong>
+                <span>CashReady Technologies<br />14th Floor, Meridian Business Tower<br />Sector 62, Noida, Uttar Pradesh 201309</span>
+              </div>
+            </div>
+            <div className="contact-item">
+              <span className="contact-icon">📞</span>
+              <div className="contact-copy">
+                <strong>Phone</strong>
+                <span>+91 120 456 7890</span>
+              </div>
+            </div>
+            <div className="contact-item contact-hours">
+              <span className="contact-icon">🕒</span>
+              <div className="contact-copy">
+                <strong>Hours</strong>
+                <span>Monday - Friday: 9:00 AM - 6:00 PM</span>
+                <span>Saturday: 10:00 AM - 2:00 PM</span>
+              </div>
+            </div>
+            <div className="contact-item">
+              <span className="contact-icon">✉️</span>
+              <div className="contact-copy">
+                <strong>Email</strong>
+                <span>support@cashready.example<br />operations@cashready.example</span>
+              </div>
+            </div>
+          </div>
         </section>
         <form className="contact-form" onSubmit={handleSubmit}>
-          <h2>Send a message</h2>
           <label>Name<input name="name" required placeholder="Your name" /></label>
           <label>Email<input type="email" name="email" required placeholder="you@example.com" /></label>
           <label>Message<textarea name="message" required rows={4} placeholder="Tell us how we can help" /></label>
