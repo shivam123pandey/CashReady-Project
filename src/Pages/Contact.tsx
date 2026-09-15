@@ -6,10 +6,35 @@ export default function Contact() {
   const navigate = useNavigate();
   const [sent, setSent] = useState(false);
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setSent(true);
-    window.setTimeout(() => setSent(false), 3500);
+
+    const formData = new FormData(event.currentTarget);
+    const payload = {
+      name: String(formData.get("name") ?? "").trim(),
+      email: String(formData.get("email") ?? "").trim(),
+      message: String(formData.get("message") ?? "").trim(),
+    };
+
+    try {
+      const response = await fetch("/api/contact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data: { ok?: boolean; error?: string } = await response.json();
+
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error ?? "Unable to send message");
+      }
+
+      setSent(true);
+      event.currentTarget.reset();
+      window.setTimeout(() => setSent(false), 3500);
+    } catch (submitError) {
+      const message = submitError instanceof Error ? submitError.message : "Unable to send message";
+      window.alert(message);
+    }
   };
 
   return (

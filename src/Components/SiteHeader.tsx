@@ -7,12 +7,38 @@ export default function SiteHeader() {
   const [loginOpen, setLoginOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [isBanker, setIsBanker] = useState(() => localStorage.getItem("cashready_role") === "banker");
+  const [isLoggedIn, setIsLoggedIn] = useState(() => Boolean(localStorage.getItem("cashready_token") || sessionStorage.getItem("cashready_token")));
 
   useEffect(() => {
     setLoginOpen(false);
     setSearchQuery("");
-    setIsBanker(localStorage.getItem("cashready_role") === "banker");
+    const nextRole = localStorage.getItem("cashready_role") === "banker";
+    setIsBanker(nextRole);
+    setIsLoggedIn(Boolean(localStorage.getItem("cashready_token") || sessionStorage.getItem("cashready_token")));
   }, [location.pathname]);
+
+  const handleLogout = async () => {
+    const token = localStorage.getItem("cashready_token") ?? sessionStorage.getItem("cashready_token");
+
+    try {
+      if (token) {
+        await fetch("/api/auth/logout", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      }
+    } catch (error) {
+      console.warn("Logout request failed", error);
+    } finally {
+      localStorage.removeItem("cashready_token");
+      localStorage.removeItem("cashready_role");
+      sessionStorage.removeItem("cashready_token");
+      setLoginOpen(false);
+      setIsLoggedIn(false);
+      navigate("/");
+    }
+  };
+
   const isActive = (paths: string[]) => paths.includes(location.pathname);
   const searchOptions = [
     { label: "ATM Locator", hint: "Find nearby ATMs", path: "/map" },
@@ -65,23 +91,35 @@ export default function SiteHeader() {
           )}
         </div>
         <div className="login-menu">
-          <button
-            className="login-button"
-            type="button"
-            aria-expanded={loginOpen}
-            onClick={() => setLoginOpen((isOpen) => !isOpen)}
-          >
-            Login
-          </button>
-          {loginOpen && (
-            <div className="login-dropdown">
-              <button type="button" onClick={() => { setLoginOpen(false); navigate("/login/customer"); }}>
-                Login as Customer
+          {isLoggedIn ? (
+            <button
+              className="login-button"
+              type="button"
+              onClick={handleLogout}
+            >
+              Logout
+            </button>
+          ) : (
+            <>
+              <button
+                className="login-button"
+                type="button"
+                aria-expanded={loginOpen}
+                onClick={() => setLoginOpen((isOpen) => !isOpen)}
+              >
+                Login
               </button>
-              <button type="button" onClick={() => { setLoginOpen(false); navigate("/login/banker"); }}>
-                Login as Banker
-              </button>
-            </div>
+              {loginOpen && (
+                <div className="login-dropdown">
+                  <button type="button" onClick={() => { setLoginOpen(false); navigate("/login/customer"); }}>
+                    Login as Customer
+                  </button>
+                  <button type="button" onClick={() => { setLoginOpen(false); navigate("/login/banker"); }}>
+                    Login as Banker
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       </header>

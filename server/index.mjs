@@ -2,12 +2,13 @@ import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:cry
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, resolve } from "node:path";
-import { URL } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 import { promisify } from "node:util";
 
 const port = Number(process.env.API_PORT ?? 8787);
 const scrypt = promisify(scryptCallback);
-const usersFile = resolve("server/data/users.json");
+const usersFile = resolve(dirname(fileURLToPath(import.meta.url)), "data/users.json");
+const contactMessagesFile = resolve(dirname(fileURLToPath(import.meta.url)), "data/contact-submissions.json");
 const sessions = new Map();
 const providerUrl = process.env.ATM_PROVIDER_URL;
 const providerApiKey = process.env.ATM_PROVIDER_API_KEY;
@@ -48,6 +49,31 @@ async function loadUsers() {
     await writeFile(usersFile, JSON.stringify(seededUsers, null, 2));
     return seededUsers;
   }
+}
+
+async function loadContactMessages() {
+  try {
+    return JSON.parse(await readFile(contactMessagesFile, "utf8"));
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+
+    await mkdir(dirname(contactMessagesFile), { recursive: true });
+    await writeFile(contactMessagesFile, JSON.stringify([], null, 2));
+    return [];
+  }
+}
+
+async function saveContactMessage(payload) {
+  const messages = await loadContactMessages();
+  const message = {
+    id: randomBytes(6).toString("hex"),
+    createdAt: new Date().toISOString(),
+    ...payload,
+  };
+
+  messages.push(message);
+  await writeFile(contactMessagesFile, JSON.stringify(messages, null, 2));
+  return message;
 }
 
 function createSession(user) {
@@ -158,6 +184,82 @@ function normalizeStatus(payload) {
   };
 }
 
+function haversineKm(fromLatitude, fromLongitude, toLatitude, toLongitude) {
+  const earthRadiusKm = 6371;
+  const latitudeDelta = ((toLatitude - fromLatitude) * Math.PI) / 180;
+  const longitudeDelta = ((toLongitude - fromLongitude) * Math.PI) / 180;
+  const latitudeOne = (fromLatitude * Math.PI) / 180;
+  const latitudeTwo = (toLatitude * Math.PI) / 180;
+  const haversine =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.sin(longitudeDelta / 2) ** 2 *
+      Math.cos(latitudeOne) *
+      Math.cos(latitudeTwo);
+
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+}
+
+function buildSyntheticAtmRecommendations(latitude, longitude, requestedAmount, customerLimit) {
+  const atmSeed = [
+    { id: "ATM-101", name: "HDFC Bank ATM", lat: latitude + 0.008, lon: longitude + 0.010 },
+    { id: "ATM-104", name: "ICICI Bank ATM", lat: latitude - 0.012, lon: longitude + 0.016 },
+    { id: "ATM-118", name: "SBI ATM", lat: latitude + 0.021, lon: longitude - 0.009 },
+    { id: "ATM-221", name: "Axis Bank ATM", lat: latitude - 0.018, lon: longitude - 0.014 },
+    { id: "ATM-305", name: "Kotak ATM", lat: latitude + 0.015, lon: longitude + 0.021 },
+    { id: "ATM-412", name: "Canara Bank ATM", lat: latitude - 0.024, lon: longitude + 0.011 },
+  ];
+
+  return atmSeed
+    .map((atm) => {
+      const distanceKm = haversineKm(latitude, longitude, atm.lat, atm.lon);
+      const demandFactor = 1 + Math.min(1.2, requestedAmount / Math.max(customerLimit, 1));
+      const healthScore = Math.max(0.42, Math.min(0.98, 0.8 + (Math.sin((atm.id.length + distanceKm) * 0.8) + 1) * 0.12));
+      const distanceScore = Math.max(0.2, 1 - distanceKm / 6);
+      const sufficiencyScore = Math.min(0.99, Math.max(0.35,
+        healthScore * 0.58 + distanceScore * 0.32 + (demandFactor > 1 ? 0.08 : 0.15)
+      ));
+
+      let status = "Healthy";
+      if (sufficiencyScore < 0.62) status = "Critical";
+      else if (sufficiencyScore < 0.76) status = "Refill Soon";
+
+      const isEligible = requestedAmount <= customerLimit && sufficiencyScore >= 0.62;
+      return {
+        id: atm.id,
+        name: atm.name,
+        latitude: atm.lat,
+        longitude: atm.lon,
+        distanceKm: Number(distanceKm.toFixed(2)),
+        status,
+        healthScore: Number(healthScore.toFixed(2)),
+        sufficiencyScore: Number(sufficiencyScore.toFixed(2)),
+        isEligible,
+        recommendation: isEligible
+          ? "Likely to serve the requested amount within the customer limit"
+          : "Not recommended for the requested withdrawal amount",
+      };
+    })
+    .filter((atm) => atm.distanceKm <= 5)
+    .sort((first, second) => {
+      if (Number(first.isEligible) !== Number(second.isEligible)) {
+        return Number(second.isEligible) - Number(first.isEligible);
+      }
+      return first.distanceKm - second.distanceKm;
+    })
+    .slice(0, 5);
+}
+
+function buildRefillForecast(latitude, longitude) {
+  const atms = buildSyntheticAtmRecommendations(latitude, longitude, 50000, 75000);
+  return atms.map((atm) => ({
+    id: atm.id,
+    name: atm.name,
+    status: atm.status,
+    risk: atm.status === "Critical" ? "high" : atm.status === "Refill Soon" ? "medium" : "low",
+    sufficiencyScore: atm.sufficiencyScore,
+  }));
+}
+
 async function getProviderStatus(query) {
   const coordinates = parseCoordinates(query);
 
@@ -233,6 +335,54 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (request.method === "POST" && requestUrl.pathname === "/api/auth/logout") {
+    const authorization = request.headers.authorization ?? "";
+    const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+
+    if (token) {
+      sessions.delete(token);
+    }
+
+    sendJson(response, 200, { ok: true, message: "Logged out successfully" });
+    return;
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/api/auth/me") {
+    const users = await loadUsers();
+    const user = getAuthenticatedUser(request, users);
+    if (!user) {
+      sendJson(response, 401, { error: "Authentication required" });
+      return;
+    }
+
+    sendJson(response, 200, { user: publicUser(user) });
+    return;
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === "/api/contact") {
+    try {
+      const body = await readJsonBody(request);
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      const email = typeof body.email === "string" ? body.email.trim() : "";
+      const message = typeof body.message === "string" ? body.message.trim() : "";
+
+      if (!name || !email || !message) {
+        sendJson(response, 400, { error: "name, email, and message are required" });
+        return;
+      }
+
+      const saved = await saveContactMessage({ name, email, message });
+      sendJson(response, 200, {
+        ok: true,
+        message: "Your message has been received.",
+        submissionId: saved.id,
+      });
+    } catch (error) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Invalid request" });
+    }
+    return;
+  }
+
   if (request.method === "GET" && requestUrl.pathname === "/api/banker/dashboard") {
     const users = await loadUsers();
     const user = getAuthenticatedUser(request, users);
@@ -259,6 +409,75 @@ const server = createServer(async (request, response) => {
         source: isInvalidRequest ? "invalid-request" : "provider-error",
         message,
       });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === "/api/atm/recommend") {
+    try {
+      const body = await readJsonBody(request);
+      const latitude = Number(body.lat);
+      const longitude = Number(body.lon);
+      const requestedAmount = Number(body.requestedAmount ?? 0);
+      const customerLimit = Number(body.customerLimit ?? 75000);
+
+      if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+        sendJson(response, 400, { error: "lat must be a valid latitude" });
+        return;
+      }
+      if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+        sendJson(response, 400, { error: "lon must be a valid longitude" });
+        return;
+      }
+      if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
+        sendJson(response, 400, { error: "requestedAmount must be greater than zero" });
+        return;
+      }
+		  if (requestedAmount > customerLimit) {
+        sendJson(response, 400, {
+          error: "The requested amount exceeds your daily withdrawal limit.",
+          limit: customerLimit,
+          requestedAmount,
+        });
+        return;
+      }
+
+      const eligibleAtms = buildSyntheticAtmRecommendations(latitude, longitude, requestedAmount, customerLimit);
+      sendJson(response, 200, {
+        requestedAmount,
+        customerLimit,
+        totalCandidates: eligibleAtms.length,
+        eligibleAtms,
+        summary: {
+          strongestMatch: eligibleAtms[0] ?? null,
+          count: eligibleAtms.length,
+        },
+      });
+    } catch (error) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Invalid request" });
+    }
+    return;
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/api/ai/refill-forecast") {
+    try {
+      const latitude = Number(requestUrl.searchParams.get("lat"));
+      const longitude = Number(requestUrl.searchParams.get("lon"));
+
+      if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+        sendJson(response, 400, { error: "lat must be a valid latitude" });
+        return;
+      }
+      if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+        sendJson(response, 400, { error: "lon must be a valid longitude" });
+        return;
+      }
+
+      sendJson(response, 200, {
+        forecast: buildRefillForecast(latitude, longitude),
+      });
+    } catch (error) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Forecast request failed" });
     }
     return;
   }

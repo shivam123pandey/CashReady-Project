@@ -57,21 +57,27 @@ async function getRoadDistance(
   return data.routes?.[0]?.distance;
 }
 
+const defaultLocation: Coordinates = [26.8467, 80.9462];
+
 export default function Results() {
   const navigate = useNavigate();
-  const [currentLocation, setCurrentLocation] = useState<Coordinates | null>(null);
+  const [currentLocation, setCurrentLocation] = useState<Coordinates | null>(defaultLocation);
   const [atms, setAtms] = useState<AtmResult[]>([]);
   const [status, setStatus] = useState("Finding nearby ATMs...");
 
   useEffect(() => {
     if (!navigator.geolocation) {
-      setStatus("GPS unavailable");
+      setCurrentLocation(defaultLocation);
+      setStatus("GPS unavailable; showing Lucknow demo location");
       return;
     }
 
     const watchId = navigator.geolocation.watchPosition(
       ({ coords }) => setCurrentLocation([coords.latitude, coords.longitude]),
-      () => setStatus("Location permission unavailable"),
+      () => {
+        setCurrentLocation(defaultLocation);
+        setStatus("Location permission unavailable; showing Lucknow demo location");
+      },
       { enableHighAccuracy: true, maximumAge: 30000, timeout: 10000 },
     );
 
@@ -82,58 +88,97 @@ export default function Results() {
     if (!currentLocation) return;
 
     const controller = new AbortController();
-    const [latitude, longitude] = currentLocation;
-    const west = longitude - 0.06;
-    const east = longitude + 0.06;
-    const south = latitude - 0.06;
-    const north = latitude + 0.06;
-
-    setStatus("Loading live ATM data...");
+    const requestedAmount = Number(localStorage.getItem("cashready_search_amount") ?? "50000");
+    const customerLimit = Number(localStorage.getItem("cashready_customer_limit") ?? "75000");
 
     const loadAtms = async () => {
       try {
-        const response = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=jsonv2&q=ATM&limit=20&viewbox=${west},${north},${east},${south}&bounded=1`,
-          {
-            headers: { Accept: "application/json" },
-            signal: AbortSignal.any([
-              controller.signal,
-              AbortSignal.timeout(10000),
-            ]),
-          },
-        );
+        setStatus("Running CashReady AI recommendation...");
+        const response = await fetch("/api/atm/recommend", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            lat: currentLocation[0],
+            lon: currentLocation[1],
+            requestedAmount,
+            customerLimit,
+          }),
+          signal: controller.signal,
+        });
 
-        if (!response.ok) throw new Error("ATM lookup unavailable");
+        const data: {
+          eligibleAtms?: Array<{
+            id: string;
+            name: string;
+            distanceKm: number;
+            latitude: number;
+            longitude: number;
+            status: string;
+            sufficiencyScore: number;
+            recommendation: string;
+          }>;
+          error?: string;
+        } = await response.json();
 
-        const places: Array<{
-          place_id: number;
-          lat: string;
-          lon: string;
-          display_name: string;
-        }> = await response.json();
-        const results = places
-          .map((place) => {
-            const location: Coordinates = [Number(place.lat), Number(place.lon)];
-            return {
-              id: place.place_id,
-              name: place.display_name.split(",")[0] || "Nearby ATM",
-              location,
-              operator: place.display_name,
-              distance: formatDistance(distanceInKm(currentLocation, location)),
-            };
-          })
-          .sort(
-            (first, second) =>
-              distanceInKm(currentLocation, first.location) -
-              distanceInKm(currentLocation, second.location),
-          );
+        if (!response.ok || !Array.isArray(data.eligibleAtms)) {
+          throw new Error(data.error ?? "AI recommendation unavailable");
+        }
+
+        const results = data.eligibleAtms.map((atm) => ({
+          id: Number(String(atm.id).replace(/\D/g, "")) || Date.now() + Math.random(),
+          name: atm.name,
+          location: [atm.latitude, atm.longitude] as Coordinates,
+          operator: `${atm.status} • AI score ${atm.sufficiencyScore}`,
+          distance: `${atm.distanceKm.toFixed(1)} KM`,
+        }));
 
         setAtms(results);
-        setStatus(`${results.length} live ATM${results.length === 1 ? "" : "s"} found`);
+        setStatus(`${results.length} eligible ATM${results.length === 1 ? "" : "s"} matched your request`);
       } catch (error) {
-        if ((error as Error).name !== "AbortError") {
+        if ((error as Error).name === "AbortError") return;
+
+        setStatus("AI recommendation unavailable; showing fallback nearby ATMs...");
+
+        try {
+          const [latitude, longitude] = currentLocation;
+          const west = longitude - 0.06;
+          const east = longitude + 0.06;
+          const south = latitude - 0.06;
+          const north = latitude + 0.06;
+          const response = await fetch(
+            `https://nominatim.openstreetmap.org/search?format=jsonv2&q=ATM&limit=20&viewbox=${west},${north},${east},${south}&bounded=1`,
+            {
+              headers: { Accept: "application/json" },
+              signal: controller.signal,
+            },
+          );
+
+          if (!response.ok) throw new Error("ATM lookup unavailable");
+
+          const places: Array<{
+            place_id: number;
+            lat: string;
+            lon: string;
+            display_name: string;
+          }> = await response.json();
+          const results = places
+            .slice(0, 4)
+            .map((place) => {
+              const location: Coordinates = [Number(place.lat), Number(place.lon)];
+              return {
+                id: place.place_id,
+                name: place.display_name.split(",")[0] || "Nearby ATM",
+                location,
+                operator: place.display_name,
+                distance: formatDistance(distanceInKm(currentLocation, location)),
+              };
+            });
+
+          setAtms(results);
+          setStatus(`${results.length} nearby ATM${results.length === 1 ? "" : "s"} found`);
+        } catch {
           setAtms([]);
-          setStatus("Live ATM data unavailable");
+          setStatus("ATM data unavailable");
         }
       }
     };

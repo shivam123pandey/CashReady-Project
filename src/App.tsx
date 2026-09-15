@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 import Landing from "./Pages/Landing";
+import Home from "./Pages/Home";
 import BackupLanding from "./Pages/BackupLanding";
 import Login from "./Pages/Login";
 import SearchATM from "./Pages/SearchATM";
@@ -20,7 +21,7 @@ function App() {
         <Route path="/" element={<Landing />} />
         <Route path="/backup" element={<BackupLanding />} />
         <Route path="/contact" element={<Contact />} />
-        <Route path="/home" element={<Landing />} />
+        <Route path="/home" element={<Home />} />
 
         <Route
           path="/login/customer"
