@@ -15,6 +15,7 @@ import {
   useMap,
 } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
+import { getCashLevelLabel, getDummyAtmCashPercent } from "../data/atmCashData";
 
 type Coordinates = [number, number];
 
@@ -432,15 +433,24 @@ export default function MapView() {
           <Box className="atm-list" sx={{ display: "grid", gap: 1.5, mt: 2 }}>
             {nearbyAtms.map((atm) => {
               const isSelected = atm.id === selectedAtmId;
-              const cashLabel = isSelected && cashStatus.available === true ? "Available" : isSelected && cashStatus.available === false ? "Unavailable" : "Provider unavailable";
+              const cashPercent = getDummyAtmCashPercent(atm.name, atm.id);
+              const cashLevel = getCashLevelLabel(cashPercent);
+              const statusTone = cashPercent >= 75 ? "#16A34A" : cashPercent >= 50 ? "#D97706" : "#DC2626";
+              const cashLabel = isSelected && cashStatus.available === true ? "Available" : isSelected && cashStatus.available === false ? "Unavailable" : cashLevel;
               return <Card key={atm.id} component="button" onClick={() => selectAtm(atm)} sx={{ p: 1.5, textAlign: "left", borderRadius: 2, border: isSelected ? "2px solid #0F766E" : "1px solid #E2E8F0", bgcolor: isSelected ? "#E7F5F1" : "#fff", cursor: "pointer", "&:hover": { borderColor: "#0F766E" } }}>
                 <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1 }}>
-                  <Box sx={{ minWidth: 0 }}>
+                  <Box sx={{ minWidth: 0, flex: 1 }}>
                     <Typography sx={{ fontWeight: "bold", color: "#16324F", fontSize: 14 }}>🏧 {atm.name}</Typography>
                     <Typography sx={{ mt: 0.5, fontSize: 12, color: "#475569" }}>{atm.operator ?? "Address unavailable"}</Typography>
-                    <Box sx={{ display: "flex", gap: 1.5, mt: 0.75, whiteSpace: "nowrap" }}>
+                    <Box sx={{ display: "flex", gap: 1.5, mt: 0.75, whiteSpace: "nowrap", alignItems: "center", flexWrap: "wrap" }}>
                       <Typography sx={{ fontSize: 12 }}><strong>Distance:</strong> {formatDistance(distanceFromCurrentLocation(atm, currentLocation))}</Typography>
-                      <Typography sx={{ fontSize: 12 }}><strong>Cash:</strong> {cashLabel}</Typography>
+                      <Typography sx={{ fontSize: 12 }}><strong>Cash:</strong> {cashPercent}%</Typography>
+                    </Box>
+                    <Box sx={{ mt: 0.75, display: "flex", alignItems: "center", gap: 1 }}>
+                      <Box sx={{ flex: 1, height: 8, borderRadius: 999, background: "#E2E8F0", overflow: "hidden" }}>
+                        <Box sx={{ width: `${cashPercent}%`, height: "100%", borderRadius: 999, background: statusTone }} />
+                      </Box>
+                      <Typography sx={{ fontSize: 11, color: statusTone, fontWeight: 700 }}>{cashLabel}</Typography>
                     </Box>
                   </Box>
                   <Button className="google-maps-button" size="small" variant="outlined" aria-label={`Open ${atm.name} in Google Maps`} title="Open in Google Maps" onClick={(event) => { event.stopPropagation(); selectAtm(atm); openGoogleMapsNavigation(atm); }} sx={{ flexShrink: 0, minWidth: 34, width: 34, height: 34, p: 0, borderRadius: "50%", fontSize: 20 }}>⌖</Button>
