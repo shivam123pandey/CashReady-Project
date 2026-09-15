@@ -15,7 +15,6 @@ import {
   useMap,
 } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
-import { getCashLevelLabel, getDummyAtmCashPercent } from "../data/atmCashData";
 
 type Coordinates = [number, number];
 
@@ -159,6 +158,7 @@ export default function MapView() {
     source: "cashready-api",
   });
   const [routePath, setRoutePath] = useState<Coordinates[]>([]);
+  const [cashPredictions, setCashPredictions] = useState<Record<number, { cashPercent: number; confidence: number; likelySufficient: boolean }>>({});
   const lastFetchedLocation = useRef<Coordinates | null>(null);
   const watchIdRef = useRef<number | null>(null);
 
@@ -305,7 +305,7 @@ export default function MapView() {
           setAtmStatus(`${atms.length} nearby ATM${atms.length === 1 ? "" : "s"} found`);
           return;
         }
-      } catch (error) {
+      } catch {
         if (controller.signal.aborted) return;
       }
 
@@ -350,7 +350,7 @@ export default function MapView() {
               : "No mapped ATMs found within 5 km",
           );
           return;
-        } catch (error) {
+        } catch {
           if (controller.signal.aborted) return;
         }
       }
@@ -428,6 +428,23 @@ export default function MapView() {
 
     return () => controller.abort();
   }, [selectedAtm]);
+
+  useEffect(() => {
+    if (!nearbyAtms.length) return;
+    const controller = new AbortController();
+    const requestedAmount = Number(localStorage.getItem("cashready_search_amount") ?? 0);
+    const customerLimit = Number(localStorage.getItem("cashready_customer_limit") ?? 75000);
+    Promise.all(nearbyAtms.map(async (atm) => {
+      const params = new URLSearchParams({ lat: String(currentLocation[0]), lon: String(currentLocation[1]), atmLat: String(atm.location[0]), atmLon: String(atm.location[1]), atmId: String(atm.id), amount: String(requestedAmount), limit: String(customerLimit) });
+      const response = await fetch(`/api/atm/cash-predict?${params.toString()}`, { signal: controller.signal });
+      if (!response.ok) throw new Error("Cash prediction unavailable");
+      const data: { cashPercent: number; confidence: number; likelySufficient: boolean } = await response.json();
+      return [atm.id, data] as const;
+    })).then((predictions) => setCashPredictions(Object.fromEntries(predictions))).catch((error: Error) => {
+      if (error.name !== "AbortError") setCashPredictions({});
+    });
+    return () => controller.abort();
+  }, [currentLocation, nearbyAtms]);
 
   useEffect(() => {
     if (!selectedAtm) {
@@ -520,22 +537,29 @@ export default function MapView() {
           <Box className="atm-list" sx={{ display: "grid", gap: 1.5, mt: 2 }}>
             {nearbyAtms.map((atm) => {
               const isSelected = atm.id === selectedAtmId;
-              const cashPercent = getDummyAtmCashPercent(atm.name, atm.id);
-              const cashLevel = getCashLevelLabel(cashPercent);
-              const statusTone = cashPercent >= 75 ? "#16A34A" : cashPercent >= 50 ? "#D97706" : "#DC2626";
-              const cashLabel = isSelected && cashStatus.available === true ? "Available" : isSelected && cashStatus.available === false ? "Unavailable" : cashLevel;
-              return <Card key={atm.id} component="button" onClick={() => selectAtm(atm)} sx={{ p: 1.5, textAlign: "left", borderRadius: 2, border: isSelected ? "2px solid #0F766E" : "1px solid #E2E8F0", bgcolor: isSelected ? "#E7F5F1" : "#fff", cursor: "pointer", "&:hover": { borderColor: "#0F766E" } }}>
+              const prediction = cashPredictions[atm.id];
+              const cashPercent = prediction?.cashPercent;
+              const cashLevel = prediction === undefined ? "Estimating..." : cashPercent >= 75 ? "High" : cashPercent >= 50 ? "Medium" : "Low";
+              const statusTone = prediction === undefined ? "#94A3B8" : prediction.likelySufficient ? "#16A34A" : "#DC2626";
+              const selectedAmount = Number(localStorage.getItem("cashready_search_amount") ?? 0);
+              const cashLabel = isSelected && cashStatus.available === true ? "Available" : isSelected && cashStatus.available === false ? "Unavailable" : prediction === undefined ? "AI estimate: calculating" : selectedAmount > 0 ? (prediction.likelySufficient ? `Likely enough for ₹${selectedAmount.toLocaleString()}` : `May not cover ₹${selectedAmount.toLocaleString()}`) : `AI estimate: ${cashLevel}`;
+              return <Card key={atm.id} component="div" onClick={() => selectAtm(atm)} role="button" tabIndex={0} onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  selectAtm(atm);
+                }
+              }} sx={{ p: 1.5, textAlign: "left", borderRadius: 2, border: isSelected ? "2px solid #0F766E" : "1px solid #E2E8F0", bgcolor: isSelected ? "#E7F5F1" : "#fff", cursor: "pointer", "&:hover": { borderColor: "#0F766E" } }}>
                 <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1 }}>
                   <Box sx={{ minWidth: 0, flex: 1 }}>
                     <Typography sx={{ fontWeight: "bold", color: "#16324F", fontSize: 14 }}>🏧 {atm.name}</Typography>
                     <Typography sx={{ mt: 0.5, fontSize: 12, color: "#475569" }}>{atm.operator ?? "Address unavailable"}</Typography>
                     <Box sx={{ display: "flex", gap: 1.5, mt: 0.75, whiteSpace: "nowrap", alignItems: "center", flexWrap: "wrap" }}>
                       <Typography sx={{ fontSize: 12 }}><strong>Distance:</strong> {formatDistance(distanceFromCurrentLocation(atm, currentLocation))}</Typography>
-                      <Typography sx={{ fontSize: 12 }}><strong>Cash:</strong> {cashPercent}%</Typography>
+                      <Typography sx={{ fontSize: 12 }}><strong>Cash:</strong> {cashPercent === undefined ? "Estimating..." : `${cashPercent}% · ${Math.round((prediction?.confidence ?? 0) * 100)}% confidence`}</Typography>
                     </Box>
                     <Box sx={{ mt: 0.75, display: "flex", alignItems: "center", gap: 1 }}>
                       <Box sx={{ flex: 1, height: 8, borderRadius: 999, background: "#E2E8F0", overflow: "hidden" }}>
-                        <Box sx={{ width: `${cashPercent}%`, height: "100%", borderRadius: 999, background: statusTone }} />
+                        <Box sx={{ width: `${cashPercent ?? 0}%`, height: "100%", borderRadius: 999, background: statusTone }} />
                       </Box>
                       <Typography sx={{ fontSize: 11, color: statusTone, fontWeight: 700 }}>{cashLabel}</Typography>
                     </Box>

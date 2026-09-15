@@ -1,7 +1,6 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 import Landing from "./Pages/Landing";
-import Home from "./Pages/Home";
 import BackupLanding from "./Pages/BackupLanding";
 import Login from "./Pages/Login";
 import SearchATM from "./Pages/SearchATM";
@@ -19,9 +18,10 @@ function App() {
       <div className="app-content">
       <Routes>
         <Route path="/" element={<Landing />} />
+        <Route path="/landing" element={<Landing />} />
         <Route path="/backup" element={<BackupLanding />} />
         <Route path="/contact" element={<Contact />} />
-        <Route path="/home" element={<Home />} />
+        <Route path="/home" element={<Landing />} />
 
         <Route
           path="/login/customer"
@@ -42,7 +42,7 @@ function App() {
 
         <Route path="/results" element={<Results />} />
 
-        <Route path="/forecasting" element={<UnderDevelopment title="Cash Forecasting" />} />
+        <Route path="/forecasting" element={<UnderDevelopment title="Cash Forecasting" pageKey="forecasting" />} />
         <Route path="/operations" element={<UnderDevelopment title="Operations Center & Reports" />} />
         <Route path="/reports" element={<UnderDevelopment title="Reports" />} />
         <Route path="/operations-reports" element={<UnderDevelopment title="Operations Center & Reports" />} />

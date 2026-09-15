@@ -1,20 +1,67 @@
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { promisify } from "node:util";
+import Database from "better-sqlite3";
+import { buildMLRecommendation, buildMLForecast, predictCashAvailability } from "./atmModel.mjs";
 
 const port = Number(process.env.API_PORT ?? 8787);
 const scrypt = promisify(scryptCallback);
 const usersFile = resolve(dirname(fileURLToPath(import.meta.url)), "data/users.json");
 const contactMessagesFile = resolve(dirname(fileURLToPath(import.meta.url)), "data/contact-submissions.json");
+const databasePath = resolve(dirname(fileURLToPath(import.meta.url)), "data/cashready.db");
 const sessions = new Map();
 const providerUrl = process.env.ATM_PROVIDER_URL;
 const providerApiKey = process.env.ATM_PROVIDER_API_KEY;
 const providerAuthHeader = process.env.ATM_PROVIDER_AUTH_HEADER ?? "Authorization";
 const providerAuthPrefix = process.env.ATM_PROVIDER_AUTH_PREFIX ?? "Bearer";
 const providerTimeoutMs = Number(process.env.ATM_PROVIDER_TIMEOUT_MS ?? 8000);
+const sessionTtlMs = Number(process.env.SESSION_TTL_MS ?? 8 * 60 * 60 * 1000);
+const rateWindowMs = 60 * 1000;
+const rateLimit = Number(process.env.API_RATE_LIMIT ?? 120);
+const requestCounts = new Map();
+const db = new Database(databasePath);
+db.pragma("journal_mode = WAL");
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    role TEXT NOT NULL,
+    name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_role
+    ON users(username, role);
+
+  CREATE TABLE IF NOT EXISTS contact_messages (
+    id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    message TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS atm_forecasts (
+    id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    requested_amount REAL NOT NULL,
+    customer_limit REAL NOT NULL,
+    prediction_json TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+`);
 
 const demoUsers = [
   { id: "customer-demo", username: "customer@cashready.test", role: "customer", name: "Demo Customer", password: "Customer@123" },
@@ -35,50 +82,81 @@ async function verifyPassword(password, storedHash) {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
-async function loadUsers() {
-  try {
-    return JSON.parse(await readFile(usersFile, "utf8"));
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-
-    await mkdir(dirname(usersFile), { recursive: true });
-    const seededUsers = await Promise.all(demoUsers.map(async ({ password, ...user }) => ({
-      ...user,
-      passwordHash: await hashPassword(password),
-    })));
-    await writeFile(usersFile, JSON.stringify(seededUsers, null, 2));
-    return seededUsers;
+async function seedDemoUsers() {
+  const existingCount = Number(db.prepare("SELECT COUNT(*) AS count FROM users").get()?.count ?? 0);
+  if (existingCount > 0) {
+    return;
   }
+
+  await mkdir(dirname(usersFile), { recursive: true });
+  const seededUsers = await Promise.all(demoUsers.map(async ({ password, ...user }) => ({
+    ...user,
+    passwordHash: await hashPassword(password),
+  })));
+
+  const insertUser = db.prepare(`
+    INSERT INTO users (id, username, role, name, password_hash)
+    VALUES (@id, @username, @role, @name, @passwordHash)
+  `);
+
+  const transaction = db.transaction((users) => {
+    for (const user of users) {
+      insertUser.run(user);
+    }
+  });
+
+  transaction(seededUsers);
+  await writeFile(usersFile, JSON.stringify(seededUsers, null, 2)).catch(() => undefined);
+}
+
+async function loadUsers() {
+  await seedDemoUsers();
+  return db.prepare("SELECT * FROM users").all().map((user) => ({
+    ...user,
+    passwordHash: user.password_hash,
+  }));
 }
 
 async function loadContactMessages() {
-  try {
-    return JSON.parse(await readFile(contactMessagesFile, "utf8"));
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
+  await mkdir(dirname(contactMessagesFile), { recursive: true });
+  const rows = db.prepare("SELECT * FROM contact_messages ORDER BY created_at DESC").all();
+  const serialized = rows.map((row) => ({
+    id: row.id,
+    createdAt: row.created_at,
+    name: row.name,
+    email: row.email,
+    message: row.message,
+  }));
 
-    await mkdir(dirname(contactMessagesFile), { recursive: true });
-    await writeFile(contactMessagesFile, JSON.stringify([], null, 2));
-    return [];
+  try {
+    await writeFile(contactMessagesFile, JSON.stringify(serialized, null, 2));
+  } catch {
+    // Best effort sync for compatibility with the existing file-backed workflow.
   }
+  return serialized;
 }
 
 async function saveContactMessage(payload) {
-  const messages = await loadContactMessages();
   const message = {
     id: randomBytes(6).toString("hex"),
     createdAt: new Date().toISOString(),
     ...payload,
   };
 
-  messages.push(message);
-  await writeFile(contactMessagesFile, JSON.stringify(messages, null, 2));
+  db.prepare(`
+    INSERT INTO contact_messages (id, created_at, name, email, message)
+    VALUES (@id, @createdAt, @name, @email, @message)
+  `).run(message);
+
+  await loadContactMessages();
   return message;
 }
 
 function createSession(user) {
   const token = randomBytes(32).toString("hex");
-  sessions.set(token, { userId: user.id, expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
+  const expiresAt = Date.now() + sessionTtlMs;
+  sessions.set(token, { userId: user.id, expiresAt });
+  db.prepare("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)").run(token, user.id, expiresAt);
   return token;
 }
 
@@ -89,8 +167,18 @@ function publicUser(user) {
 function getAuthenticatedUser(request, users) {
   const authorization = request.headers.authorization ?? "";
   const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
-  const session = sessions.get(token);
-  if (!session || session.expiresAt <= Date.now()) return null;
+  let session = sessions.get(token);
+  if (!session) {
+    const stored = db.prepare("SELECT user_id AS userId, expires_at AS expiresAt FROM sessions WHERE token = ?").get(token);
+    if (stored) {
+      session = stored;
+      sessions.set(token, session);
+    }
+  }
+  if (!session || session.expiresAt <= Date.now()) {
+    if (session) db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
+    return null;
+  }
 
   return users.find((user) => user.id === session.userId) ?? null;
 }
@@ -128,15 +216,57 @@ function createDashboardSnapshot() {
   };
 }
 
+function createOperationsSnapshot() {
+  const updatedAt = new Date().toISOString();
+  return {
+    updatedAt,
+    alerts: 4,
+    activeRuns: 17,
+    terminalsNeedingAction: 12,
+    uptime: "99.3%",
+    availability: "94%",
+    withdrawals: "₹12.4M",
+    queue: [
+      { id: "ATM-034", location: "Connaught Place", owner: "Unassigned", priority: "Critical", eta: "Today, 11:30 AM" },
+      { id: "ATM-089", location: "Rajiv Chowk", owner: "R. Mehta", priority: "Critical", eta: "Today, 1:00 PM" },
+      { id: "ATM-112", location: "Barakhamba Road", owner: "A. Singh", priority: "Refill soon", eta: "Today, 3:30 PM" },
+    ],
+    reports: [
+      { id: "daily-network-summary", name: "Daily network summary", status: "Ready", generatedAt: "Today, 08:45 AM" },
+      { id: "cash-movement-report", name: "Cash movement report", status: "Ready", generatedAt: "Yesterday, 06:20 PM" },
+      { id: "export-center", name: "Executive export package", status: "Scheduled", generatedAt: "Tomorrow, 08:00 AM" },
+    ],
+  };
+}
+
 function sendJson(response, statusCode, body) {
   response.writeHead(statusCode, {
     "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin": process.env.CORS_ORIGIN ?? "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "same-origin",
   });
   response.end(JSON.stringify(body));
+}
+
+function isRateLimited(request) {
+  const address = request.socket.remoteAddress ?? "unknown";
+  const now = Date.now();
+  const current = requestCounts.get(address);
+  if (!current || current.resetAt <= now) {
+    requestCounts.set(address, { count: 1, resetAt: now + rateWindowMs });
+    return false;
+  }
+  current.count += 1;
+  return current.count > rateLimit;
+}
+
+function cleanupExpiredSessions() {
+  db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(Date.now());
 }
 
 async function readJsonBody(request) {
@@ -209,54 +339,49 @@ function buildSyntheticAtmRecommendations(latitude, longitude, requestedAmount, 
     { id: "ATM-412", name: "Canara Bank ATM", lat: latitude - 0.024, lon: longitude + 0.011 },
   ];
 
-  return atmSeed
+  const hour = new Date().getHours();
+  const dayOfWeek = new Date().getDay();
+
+  const candidates = atmSeed
     .map((atm) => {
       const distanceKm = haversineKm(latitude, longitude, atm.lat, atm.lon);
-      const demandFactor = 1 + Math.min(1.2, requestedAmount / Math.max(customerLimit, 1));
       const healthScore = Math.max(0.42, Math.min(0.98, 0.8 + (Math.sin((atm.id.length + distanceKm) * 0.8) + 1) * 0.12));
-      const distanceScore = Math.max(0.2, 1 - distanceKm / 6);
-      const sufficiencyScore = Math.min(0.99, Math.max(0.35,
-        healthScore * 0.58 + distanceScore * 0.32 + (demandFactor > 1 ? 0.08 : 0.15)
-      ));
-
-      let status = "Healthy";
-      if (sufficiencyScore < 0.62) status = "Critical";
-      else if (sufficiencyScore < 0.76) status = "Refill Soon";
-
-      const isEligible = requestedAmount <= customerLimit && sufficiencyScore >= 0.62;
+      const cashLevel = Math.max(40, Math.min(95, 84 - distanceKm * 4 + ((hour >= 9 && hour <= 18) ? 6 : -2)));
       return {
         id: atm.id,
         name: atm.name,
         latitude: atm.lat,
         longitude: atm.lon,
         distanceKm: Number(distanceKm.toFixed(2)),
-        status,
         healthScore: Number(healthScore.toFixed(2)),
-        sufficiencyScore: Number(sufficiencyScore.toFixed(2)),
-        isEligible,
-        recommendation: isEligible
-          ? "Likely to serve the requested amount within the customer limit"
-          : "Not recommended for the requested withdrawal amount",
+        cashLevel: Number(cashLevel.toFixed(0)),
+        status: "Healthy",
       };
     })
-    .filter((atm) => atm.distanceKm <= 5)
-    .sort((first, second) => {
-      if (Number(first.isEligible) !== Number(second.isEligible)) {
-        return Number(second.isEligible) - Number(first.isEligible);
-      }
-      return first.distanceKm - second.distanceKm;
-    })
-    .slice(0, 5);
-}
+    .filter((atm) => atm.distanceKm <= 5);
 
-function buildRefillForecast(latitude, longitude) {
-  const atms = buildSyntheticAtmRecommendations(latitude, longitude, 50000, 75000);
-  return atms.map((atm) => ({
+  const scored = buildMLRecommendation({
+    latitude,
+    longitude,
+    requestedAmount,
+    customerLimit,
+    hour,
+    dayOfWeek,
+    candidates,
+  });
+
+  return scored.map((atm) => ({
     id: atm.id,
     name: atm.name,
-    status: atm.status,
-    risk: atm.status === "Critical" ? "high" : atm.status === "Refill Soon" ? "medium" : "low",
+    latitude: atm.latitude,
+    longitude: atm.longitude,
+    distanceKm: atm.distanceKm,
+    status: atm.status ?? "Healthy",
+    healthScore: atm.healthScore,
+    cashLevel: atm.cashLevel,
     sufficiencyScore: atm.sufficiencyScore,
+    isEligible: atm.isEligible,
+    recommendation: atm.recommendation,
   }));
 }
 
@@ -298,6 +423,11 @@ async function getProviderStatus(query) {
 
 const server = createServer(async (request, response) => {
   const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
+
+  if (isRateLimited(request)) {
+    sendJson(response, 429, { error: "Too many requests. Please try again shortly." });
+    return;
+  }
 
   if (request.method === "OPTIONS") {
     sendJson(response, 204, {});
@@ -341,6 +471,7 @@ const server = createServer(async (request, response) => {
 
     if (token) {
       sessions.delete(token);
+      db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
     }
 
     sendJson(response, 200, { ok: true, message: "Logged out successfully" });
@@ -395,6 +526,36 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (request.method === "GET" && ["/api/operations/overview", "/api/forecasting"].includes(requestUrl.pathname)) {
+    const users = await loadUsers();
+    const user = getAuthenticatedUser(request, users);
+    if (!user || user.role !== "banker") {
+      sendJson(response, 401, { error: "Banker authentication required" });
+      return;
+    }
+
+    if (requestUrl.pathname === "/api/operations/overview") {
+      sendJson(response, 200, { operations: createOperationsSnapshot() });
+      return;
+    }
+
+    const latitude = Number(requestUrl.searchParams.get("lat") ?? 26.8467);
+    const longitude = Number(requestUrl.searchParams.get("lon") ?? 80.9462);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      sendJson(response, 400, { error: "lat and lon must be valid coordinates" });
+      return;
+    }
+    const forecast = buildMLForecast({
+      latitude,
+      longitude,
+      hour: new Date().getHours(),
+      dayOfWeek: new Date().getDay(),
+      candidates: buildSyntheticAtmRecommendations(latitude, longitude, 50000, 75000),
+    });
+    sendJson(response, 200, { forecast, generatedAt: new Date().toISOString(), model: "knn-style ATM forecast engine" });
+    return;
+  }
+
   if (request.method === "GET" && requestUrl.pathname === "/api/atm-status") {
     try {
       const result = await getProviderStatus(requestUrl.searchParams);
@@ -409,6 +570,29 @@ const server = createServer(async (request, response) => {
         source: isInvalidRequest ? "invalid-request" : "provider-error",
         message,
       });
+    }
+    return;
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/api/atm/cash-predict") {
+    try {
+      const latitude = Number(requestUrl.searchParams.get("lat"));
+      const longitude = Number(requestUrl.searchParams.get("lon"));
+      const atmId = Number(requestUrl.searchParams.get("atmId") ?? 0);
+      const requestedAmount = Number(requestUrl.searchParams.get("amount") ?? 0);
+      const customerLimit = Number(requestUrl.searchParams.get("limit") ?? 75000);
+      if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+        sendJson(response, 400, { error: "lat and lon must be valid coordinates" });
+        return;
+      }
+      const distanceKm = haversineKm(latitude, longitude, Number(requestUrl.searchParams.get("atmLat")), Number(requestUrl.searchParams.get("atmLon")));
+      sendJson(response, 200, {
+        ...predictCashAvailability({ distanceKm, hour: new Date().getHours(), dayOfWeek: new Date().getDay(), atmId, requestedAmount, customerLimit }),
+        generatedAt: new Date().toISOString(),
+        source: "cashready-ml-estimate",
+      });
+    } catch (error) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Cash prediction failed" });
     }
     return;
   }
@@ -443,14 +627,17 @@ const server = createServer(async (request, response) => {
       }
 
       const eligibleAtms = buildSyntheticAtmRecommendations(latitude, longitude, requestedAmount, customerLimit);
+      const strongestMatch = eligibleAtms[0] ?? null;
+
       sendJson(response, 200, {
         requestedAmount,
         customerLimit,
         totalCandidates: eligibleAtms.length,
         eligibleAtms,
         summary: {
-          strongestMatch: eligibleAtms[0] ?? null,
+          strongestMatch,
           count: eligibleAtms.length,
+          model: "knn-style ATM recommendation engine",
         },
       });
     } catch (error) {
@@ -473,8 +660,17 @@ const server = createServer(async (request, response) => {
         return;
       }
 
+      const forecast = buildMLForecast({
+        latitude,
+        longitude,
+        hour: new Date().getHours(),
+        dayOfWeek: new Date().getDay(),
+        candidates: buildSyntheticAtmRecommendations(latitude, longitude, 50000, 75000),
+      });
+
       sendJson(response, 200, {
-        forecast: buildRefillForecast(latitude, longitude),
+        forecast,
+        model: "knn-style ATM forecast engine",
       });
     } catch (error) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "Forecast request failed" });
@@ -486,5 +682,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, () => {
+  cleanupExpiredSessions();
+  setInterval(cleanupExpiredSessions, 15 * 60 * 1000).unref();
   console.log(`CashReady API listening on http://127.0.0.1:${port}`);
 });

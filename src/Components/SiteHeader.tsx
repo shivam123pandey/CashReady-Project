@@ -90,7 +90,11 @@ export default function SiteHeader() {
             <div className="search-empty">No result found</div>
           )}
         </div>
-        <div className="login-menu">
+        <div
+          className="login-menu"
+          onMouseEnter={() => setLoginOpen(true)}
+          onMouseLeave={() => setLoginOpen(false)}
+        >
           {isLoggedIn ? (
             <button
               className="login-button"
@@ -105,7 +109,6 @@ export default function SiteHeader() {
                 className="login-button"
                 type="button"
                 aria-expanded={loginOpen}
-                onClick={() => setLoginOpen((isOpen) => !isOpen)}
               >
                 Login
               </button>

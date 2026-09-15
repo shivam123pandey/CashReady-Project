@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 type UnderDevelopmentProps = { title: string; pageKey?: string };
@@ -11,7 +12,33 @@ type DetailPage = {
   primaryRoute: string;
 };
 
+type OperationsSnapshot = {
+  updatedAt: string;
+  alerts: number;
+  activeRuns: number;
+  terminalsNeedingAction: number;
+  uptime: string;
+  availability: string;
+  withdrawals: string;
+  queue: Array<{ id: string; location: string; owner: string; priority: string; eta: string }>;
+  reports: Array<{ id: string; name: string; status: string; generatedAt: string }>;
+};
+
+type ForecastItem = { id: string; name: string; status: string; risk: string; sufficiencyScore: number };
+
 const detailPages: Record<string, DetailPage> = {
+  forecasting: {
+    heading: "Cash forecasting",
+    subtitle: "Prioritize replenishment using demand and terminal health signals.",
+    metrics: [
+      { label: "Forecast model", value: "Live", detail: "Updated from the ATM recommendation engine" },
+      { label: "Terminals assessed", value: "-", detail: "Loading network forecast" },
+      { label: "High-risk terminals", value: "-", detail: "Loading forecast risk" },
+    ],
+    summary: "Forecast signals combine distance, cash level, terminal health, time, and withdrawal demand to highlight where operations should act first.",
+    primaryAction: "Open operations center",
+    primaryRoute: "/operations-reports",
+  },
   "priority-queue": {
     heading: "Priority queue",
     subtitle: "12 terminals need attention before the next operating window.",
@@ -88,20 +115,51 @@ const detailPages: Record<string, DetailPage> = {
 
 export default function UnderDevelopment({ title, pageKey }: UnderDevelopmentProps) {
   const navigate = useNavigate();
+  const [operations, setOperations] = useState<OperationsSnapshot | null>(null);
+  const [forecast, setForecast] = useState<ForecastItem[]>([]);
+  const [isLoading, setIsLoading] = useState(Boolean(pageKey));
+  const [error, setError] = useState("");
   const isReports = title === "Reports";
   const isCombined = title === "Operations Center & Reports";
   const detail = pageKey ? detailPages[pageKey] : undefined;
 
+  useEffect(() => {
+    if (!pageKey) return undefined;
+    const controller = new AbortController();
+    const token = localStorage.getItem("cashready_token") ?? sessionStorage.getItem("cashready_token");
+    const endpoint = pageKey === "forecasting" ? "/api/forecasting" : "/api/operations/overview";
+    fetch(endpoint, { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: controller.signal })
+      .then(async (response) => {
+        const data = await response.json() as { operations?: OperationsSnapshot; forecast?: ForecastItem[]; error?: string };
+        if (!response.ok) throw new Error(data.error ?? "Unable to load workspace data");
+        if (data.operations) setOperations(data.operations);
+        if (data.forecast) setForecast(data.forecast);
+      })
+      .catch((loadError: unknown) => {
+        if ((loadError as Error).name !== "AbortError") setError(loadError instanceof Error ? loadError.message : "Unable to load workspace data");
+      })
+      .finally(() => setIsLoading(false));
+    return () => controller.abort();
+  }, [pageKey]);
+
   if (detail) {
+    const metrics = pageKey === "forecasting"
+      ? detail.metrics.map((metric, index) => ({
+        ...metric,
+        value: index === 1 ? String(forecast.length || "-") : index === 2 ? String(forecast.filter((item) => item.risk === "high").length || "-") : metric.value,
+      }))
+      : detail.metrics;
     return (
       <main className="development-page reports-page">
         <h1>{detail.heading}</h1>
         <p className="page-subtitle">{detail.subtitle}</p>
+        {isLoading && <p className="workspace-feedback" role="status">Loading live workspace data...</p>}
+        {error && <p className="workspace-feedback workspace-error" role="alert">{error}</p>}
 
         <section className="development-workspace">
           <div className="development-status"><span />{detail.heading} overview</div>
           <div className="development-grid">
-            {detail.metrics.map((metric) => (
+            {metrics.map((metric) => (
               <article key={metric.label}>
                 <strong>{metric.label}</strong>
                 <p>{metric.detail}</p>
@@ -113,6 +171,24 @@ export default function UnderDevelopment({ title, pageKey }: UnderDevelopmentPro
             <p style={{ color: "#475569", lineHeight: 1.6 }}>{detail.summary}</p>
             <button type="button" onClick={() => navigate(detail.primaryRoute)}>{detail.primaryAction}</button>
           </div>
+          {pageKey === "forecasting" && forecast.length > 0 && (
+            <div className="live-table-wrap">
+              <h2>Forecast priority</h2>
+              <div className="live-table">
+                <div className="live-table-row live-table-header"><span>Terminal</span><span>Status</span><span>Score</span></div>
+                {forecast.map((item) => <div className="live-table-row" key={item.id}><strong>{item.name}</strong><span className={`priority-${item.risk}`}>{item.status}</span><span>{Math.round(item.sufficiencyScore * 100)}%</span></div>)}
+              </div>
+            </div>
+          )}
+          {pageKey !== "forecasting" && operations && (
+            <div className="live-table-wrap">
+              <h2>Replenishment queue</h2>
+              <div className="live-table">
+                <div className="live-table-row live-table-header"><span>Terminal</span><span>Priority</span><span>Owner / ETA</span></div>
+                {operations.queue.map((item) => <div className="live-table-row" key={item.id}><strong>{item.id} · {item.location}</strong><span className={`priority-${item.priority === "Critical" ? "high" : "medium"}`}>{item.priority}</span><span>{item.owner} · {item.eta}</span></div>)}
+              </div>
+            </div>
+          )}
         </section>
       </main>
     );
