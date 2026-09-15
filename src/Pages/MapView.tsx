@@ -33,7 +33,7 @@ type CashStatus = {
   message?: string;
 };
 
-const fallbackLocation: Coordinates = [28.6328, 77.2197];
+const fallbackLocation: Coordinates = [26.8467, 80.9462];
 
 function straightLineDistanceKm(from: Coordinates, to: Coordinates) {
   const earthRadiusKm = 6371;
@@ -147,9 +147,10 @@ export default function MapView() {
   );
   const [nearbyAtms, setNearbyAtms] = useState<NearbyAtm[]>([]);
   const [locationStatus, setLocationStatus] = useState(
-    "Finding your location...",
+    "Tap below to allow live location",
   );
   const [atmStatus, setAtmStatus] = useState("Loading nearby ATMs...");
+  const [locationEnabled, setLocationEnabled] = useState(false);
   const [cashStatus, setCashStatus] = useState<CashStatus>({
     available: null,
     status: "loading",
@@ -158,25 +159,86 @@ export default function MapView() {
   });
   const [routePath, setRoutePath] = useState<Coordinates[]>([]);
   const lastFetchedLocation = useRef<Coordinates | null>(null);
+  const watchIdRef = useRef<number | null>(null);
 
-  useEffect(() => {
+  const requestLiveLocation = () => {
     if (!navigator.geolocation) {
-      setLocationStatus("GPS unavailable; showing Delhi demo location");
+      setLocationStatus("GPS unavailable on this browser");
+      setLocationEnabled(false);
       return;
     }
 
-    const watchId = navigator.geolocation.watchPosition(
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+
+    setLocationStatus("Requesting live location access...");
+
+    navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
         setCurrentLocation([coords.latitude, coords.longitude]);
+        setLocationEnabled(true);
         setLocationStatus("Live location enabled");
       },
       () => {
-        setLocationStatus("Location permission unavailable; showing demo location");
+        setLocationStatus("Location permission unavailable. Please allow location access for this site.");
+        setLocationEnabled(false);
       },
-      { enableHighAccuracy: true, maximumAge: 30000, timeout: 10000 },
+      { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 },
     );
 
-    return () => navigator.geolocation.clearWatch(watchId);
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      ({ coords }) => {
+        setCurrentLocation([coords.latitude, coords.longitude]);
+        setLocationEnabled(true);
+        setLocationStatus("Live location enabled");
+      },
+      () => {
+        setLocationStatus("Location permission unavailable. Please allow location access for this site.");
+        setLocationEnabled(false);
+      },
+      { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 },
+    );
+  };
+
+  useEffect(() => () => {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation?.clearWatch(watchIdRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setLocationStatus("GPS unavailable on this browser");
+      setLocationEnabled(false);
+      return;
+    }
+
+    const syncPermissionState = async () => {
+      try {
+        const permission = await navigator.permissions?.query?.({
+          name: "geolocation" as PermissionName,
+        });
+
+        if (permission?.state === "granted") {
+          requestLiveLocation();
+          return;
+        }
+
+        if (permission?.state === "prompt") {
+          setLocationStatus("Requesting live location access...");
+          requestLiveLocation();
+          return;
+        }
+      } catch {
+        // Ignore browser permission API issues and trigger the direct request anyway.
+      }
+
+      setLocationStatus("Tap below to allow live location");
+    };
+
+    void syncPermissionState();
   }, []);
 
   useEffect(() => {
@@ -427,6 +489,31 @@ export default function MapView() {
         }}
       >
         <Card sx={{ p: { xs: 2, md: 2.5 }, borderRadius: 3 }}>
+          <Card
+            sx={{
+              p: 2,
+              mb: 2,
+              borderRadius: 3,
+              background: "linear-gradient(135deg, #eef8ff 0%, #eafaf5 100%)",
+              border: "1px solid #cfe8ff",
+            }}
+          >
+            <Typography variant="h6" sx={{ fontWeight: "bold", color: "#16324F" }}>
+              📍 Allow live location
+            </Typography>
+            <Typography sx={{ mt: 0.8, color: "#475569", fontSize: 13 }}>
+              Share your current location to get nearby ATM suggestions instantly.
+            </Typography>
+            <Button
+              variant="contained"
+              fullWidth
+              sx={{ mt: 1.5, borderRadius: 2, fontWeight: "bold", background: "linear-gradient(135deg,#16324F,#0F766E)" }}
+              onClick={requestLiveLocation}
+            >
+              {locationEnabled ? "Refresh live location" : "Allow Live Location"}
+            </Button>
+          </Card>
+
           <Typography variant="h6" sx={{ fontWeight: "bold", color: "#16324F" }}>Nearby ATMs</Typography>
           <Typography sx={{ mt: 0.5, color: "#64748B", fontSize: 13 }}>{locationStatus} · {atmStatus}</Typography>
           <Box className="atm-list" sx={{ display: "grid", gap: 1.5, mt: 2 }}>

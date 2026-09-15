@@ -22,10 +22,12 @@ export default function SearchATM() {
     }
 
     if (value > 75000) {
-      alert("Amount exceeds daily withdrawal limit");
+      alert("The requested amount exceeds your daily withdrawal limit.");
       return;
     }
 
+    localStorage.setItem("cashready_search_amount", String(value));
+    localStorage.setItem("cashready_customer_limit", "75000");
     navigate("/results");
   };
 
