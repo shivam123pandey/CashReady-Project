@@ -22,7 +22,6 @@ export default function Contact() {
       if (!response.ok || !data.ok) throw new Error(data.error ?? "Unable to send message");
       setSent(true);
       event.currentTarget.reset();
-      window.setTimeout(() => setSent(false), 3500);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Unable to send message");
     } finally {
@@ -46,10 +45,16 @@ export default function Contact() {
           <label><span>Message</span><textarea name="message" required rows={7} placeholder="Tell us how we can help" /></label>
           <button type="submit" disabled={isSubmitting}>{isSubmitting ? "Sending..." : sent ? "Message sent" : "Send message"}</button>
           {error && <p className="form-error" role="alert">{error}</p>}
-          {sent && <p className="form-success">Thanks. Our team will get back to you shortly.</p>}
         </form>
       </div>
-      {sent && <div className="success-toast" role="status" aria-live="polite"><span className="success-toast-icon" aria-hidden="true">✓</span><span><strong>Message sent successfully</strong><small>Our team will get back to you shortly.</small></span></div>}
+      {sent && <div className="success-modal-backdrop" role="presentation">
+        <section className="success-modal" role="dialog" aria-modal="true" aria-labelledby="success-modal-title">
+          <span className="success-modal-icon" aria-hidden="true">✓</span>
+          <h2 id="success-modal-title">Message Sent!</h2>
+          <p>Our team will get back to you shortly.</p>
+          <button type="button" onClick={() => setSent(false)}>OK</button>
+        </section>
+      </div>}
     </main>
   );
 }
