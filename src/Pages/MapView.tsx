@@ -501,7 +501,7 @@ export default function MapView() {
       <Box
         sx={{
           display: "grid",
-          gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1fr) minmax(0, 4fr)" },
+          gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 3fr) minmax(0, 7fr)" },
           gap: 2,
           alignItems: "stretch",
         }}
@@ -533,14 +533,13 @@ export default function MapView() {
           </Card>
 
           <Typography variant="h6" sx={{ fontWeight: "bold", color: "#16324F" }}>Nearby ATMs</Typography>
-          <Typography sx={{ mt: 0.5, color: "#64748B", fontSize: 13 }}>{locationStatus} · {atmStatus}</Typography>
           <Box className="atm-list" sx={{ display: "grid", gap: 1.5, mt: 2 }}>
             {nearbyAtms.map((atm) => {
               const isSelected = atm.id === selectedAtmId;
               const prediction = cashPredictions[atm.id];
               const cashPercent = prediction?.cashPercent;
               const cashLevel = prediction === undefined ? "Estimating..." : cashPercent >= 75 ? "High" : cashPercent >= 50 ? "Medium" : "Low";
-              const statusTone = prediction === undefined ? "#94A3B8" : prediction.likelySufficient ? "#16A34A" : "#DC2626";
+              const levelColor = prediction === undefined ? "#94A3B8" : cashPercent >= 75 ? "#16A34A" : cashPercent >= 50 ? "#F59E0B" : "#DC2626";
               const selectedAmount = Number(localStorage.getItem("cashready_search_amount") ?? 0);
               const cashLabel = isSelected && cashStatus.available === true ? "Available" : isSelected && cashStatus.available === false ? "Unavailable" : prediction === undefined ? "AI estimate: calculating" : selectedAmount > 0 ? (prediction.likelySufficient ? `Likely enough for ₹${selectedAmount.toLocaleString()}` : `May not cover ₹${selectedAmount.toLocaleString()}`) : `AI estimate: ${cashLevel}`;
               return <Card key={atm.id} component="div" onClick={() => selectAtm(atm)} role="button" tabIndex={0} onKeyDown={(event) => {
@@ -559,9 +558,9 @@ export default function MapView() {
                     </Box>
                     <Box sx={{ mt: 0.75, display: "flex", alignItems: "center", gap: 1 }}>
                       <Box sx={{ flex: 1, height: 8, borderRadius: 999, background: "#E2E8F0", overflow: "hidden" }}>
-                        <Box sx={{ width: `${cashPercent ?? 0}%`, height: "100%", borderRadius: 999, background: statusTone }} />
+                        <Box sx={{ width: `${cashPercent ?? 0}%`, height: "100%", borderRadius: 999, background: levelColor }} />
                       </Box>
-                      <Typography sx={{ fontSize: 11, color: statusTone, fontWeight: 700 }}>{cashLabel}</Typography>
+                      <Typography sx={{ fontSize: 11, color: levelColor, fontWeight: 700 }}>{cashLabel}</Typography>
                     </Box>
                   </Box>
                   <Button className="google-maps-button" size="small" variant="outlined" aria-label={`Open ${atm.name} in Google Maps`} title="Open in Google Maps" onClick={(event) => { event.stopPropagation(); selectAtm(atm); openGoogleMapsNavigation(atm); }} sx={{ flexShrink: 0, minWidth: 34, width: 34, height: 34, p: 0, borderRadius: "50%", fontSize: 20 }}>⌖</Button>

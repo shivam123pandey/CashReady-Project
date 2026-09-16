@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import Database from "better-sqlite3";
 import { buildMLRecommendation, buildMLForecast, predictCashAvailability } from "./atmModel.mjs";
 
-const port = Number(process.env.API_PORT ?? 8787);
+const port = Number(process.env.API_PORT ?? 8788);
 const scrypt = promisify(scryptCallback);
 const usersFile = resolve(dirname(fileURLToPath(import.meta.url)), "data/users.json");
 const contactMessagesFile = resolve(dirname(fileURLToPath(import.meta.url)), "data/contact-submissions.json");

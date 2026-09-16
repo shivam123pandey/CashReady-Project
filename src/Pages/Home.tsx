@@ -2,8 +2,10 @@ import {
   Box,
   Button,
   Card,
+  IconButton,
   Typography,
 } from "@mui/material";
+import { RefreshRounded } from "@mui/icons-material";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -62,27 +64,21 @@ export default function Home() {
   const navigate = useNavigate();
   const [currentLocation, setCurrentLocation] = useState<Coordinates>(defaultLocation);
   const [locationEnabled, setLocationEnabled] = useState(true);
-  const [locationStatus, setLocationStatus] = useState("Live location enabled");
 
   const requestLiveLocation = () => {
     if (!navigator.geolocation) {
-      setLocationStatus("GPS unavailable on this browser");
       setLocationEnabled(false);
       return;
     }
-
-    setLocationStatus("Requesting live location access...");
 
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
         const nextLocation: Coordinates = [coords.latitude, coords.longitude];
         setCurrentLocation(nextLocation);
         setLocationEnabled(true);
-        setLocationStatus("Live location enabled");
       },
       () => {
         setCurrentLocation(defaultLocation);
-        setLocationStatus("Location permission unavailable. Please allow location access for this site.");
         setLocationEnabled(false);
       },
       { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 },
@@ -91,7 +87,6 @@ export default function Home() {
 
   useEffect(() => {
     if (!navigator.geolocation) {
-      setLocationStatus("GPS unavailable on this browser");
       setLocationEnabled(false);
       return;
     }
@@ -110,7 +105,6 @@ export default function Home() {
         // Ignore unsupported permission API; button will still work.
       }
 
-      setLocationStatus("Live location enabled");
       setLocationEnabled(true);
     };
 
@@ -291,12 +285,26 @@ export default function Home() {
             </Card>
 
             <Box sx={{ p: 0.5 }}>
-              <Typography sx={{ fontWeight: 700, fontSize: 20, color: "#16324F", mb: 1 }}>
-                Nearby ATMs
-              </Typography>
-              <Typography sx={{ color: "#64748B", fontSize: 13, mb: 2 }}>
-                {locationStatus} · {nearbyAtms.length} nearby ATMs found
-              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 1.5 }}>
+                <Typography sx={{ fontWeight: 700, fontSize: 20, color: "#16324F" }}>
+                  Nearby ATMs
+                </Typography>
+                <IconButton
+                  aria-label="Refresh nearby ATMs"
+                  onClick={requestLiveLocation}
+                  size="small"
+                  sx={{
+                    border: "1px solid #dfe7f1",
+                    bgcolor: "#ffffff",
+                    color: "#16324F",
+                    width: 32,
+                    height: 32,
+                    "&:hover": { bgcolor: "#f0f9ff", borderColor: "#bfeaf5" },
+                  }}
+                >
+                  <RefreshRounded fontSize="small" />
+                </IconButton>
+              </Box>
 
               {nearbyAtms.map((atm, index) => (
                 <Card
