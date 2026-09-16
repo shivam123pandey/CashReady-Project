@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 export default function SiteHeader() {
@@ -6,16 +6,8 @@ export default function SiteHeader() {
   const location = useLocation();
   const [loginOpen, setLoginOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [isBanker, setIsBanker] = useState(() => localStorage.getItem("cashready_role") === "banker");
-  const [isLoggedIn, setIsLoggedIn] = useState(() => Boolean(localStorage.getItem("cashready_token") || sessionStorage.getItem("cashready_token")));
-
-  useEffect(() => {
-    setLoginOpen(false);
-    setSearchQuery("");
-    const nextRole = localStorage.getItem("cashready_role") === "banker";
-    setIsBanker(nextRole);
-    setIsLoggedIn(Boolean(localStorage.getItem("cashready_token") || sessionStorage.getItem("cashready_token")));
-  }, [location.pathname]);
+  const isBanker = localStorage.getItem("cashready_role") === "banker";
+  const isLoggedIn = Boolean(localStorage.getItem("cashready_token") || sessionStorage.getItem("cashready_token"));
 
   const handleLogout = async () => {
     const token = localStorage.getItem("cashready_token") ?? sessionStorage.getItem("cashready_token");
@@ -34,7 +26,6 @@ export default function SiteHeader() {
       localStorage.removeItem("cashready_role");
       sessionStorage.removeItem("cashready_token");
       setLoginOpen(false);
-      setIsLoggedIn(false);
       navigate("/");
     }
   };

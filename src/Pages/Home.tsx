@@ -92,7 +92,7 @@ export default function Home() {
           name: "geolocation" as PermissionName,
         });
 
-        if (permission?.state === "granted") {
+        if (permission?.state === "granted" || permission?.state === "prompt") {
           requestLiveLocation();
           return;
         }
