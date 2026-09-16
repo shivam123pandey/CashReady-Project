@@ -2,8 +2,10 @@ import {
   Box,
   Button,
   Card,
+  IconButton,
   Typography,
 } from "@mui/material";
+import { RefreshRounded } from "@mui/icons-material";
 import { useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import {
@@ -146,11 +148,6 @@ export default function MapView() {
     fallbackLocation,
   );
   const [nearbyAtms, setNearbyAtms] = useState<NearbyAtm[]>([]);
-  const [locationStatus, setLocationStatus] = useState(
-    "Tap below to allow live location",
-  );
-  const [atmStatus, setAtmStatus] = useState("Loading nearby ATMs...");
-  const [locationEnabled, setLocationEnabled] = useState(false);
   const [cashStatus, setCashStatus] = useState<CashStatus>({
     available: null,
     status: "loading",
@@ -164,8 +161,6 @@ export default function MapView() {
 
   const requestLiveLocation = () => {
     if (!navigator.geolocation) {
-      setLocationStatus("GPS unavailable on this browser");
-      setLocationEnabled(false);
       return;
     }
 
@@ -174,17 +169,12 @@ export default function MapView() {
       watchIdRef.current = null;
     }
 
-    setLocationStatus("Requesting live location access...");
-
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
         setCurrentLocation([coords.latitude, coords.longitude]);
-        setLocationEnabled(true);
-        setLocationStatus("Live location enabled");
       },
       () => {
-        setLocationStatus("Location permission unavailable. Please allow location access for this site.");
-        setLocationEnabled(false);
+        setCurrentLocation(fallbackLocation);
       },
       { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 },
     );
@@ -192,12 +182,9 @@ export default function MapView() {
     watchIdRef.current = navigator.geolocation.watchPosition(
       ({ coords }) => {
         setCurrentLocation([coords.latitude, coords.longitude]);
-        setLocationEnabled(true);
-        setLocationStatus("Live location enabled");
       },
       () => {
-        setLocationStatus("Location permission unavailable. Please allow location access for this site.");
-        setLocationEnabled(false);
+        setCurrentLocation(fallbackLocation);
       },
       { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 },
     );
@@ -211,8 +198,6 @@ export default function MapView() {
 
   useEffect(() => {
     if (!navigator.geolocation) {
-      setLocationStatus("GPS unavailable on this browser");
-      setLocationEnabled(false);
       return;
     }
 
@@ -228,15 +213,12 @@ export default function MapView() {
         }
 
         if (permission?.state === "prompt") {
-          setLocationStatus("Requesting live location access...");
           requestLiveLocation();
           return;
         }
       } catch {
         // Ignore browser permission API issues and trigger the direct request anyway.
       }
-
-      setLocationStatus("Tap below to allow live location");
     };
 
     void syncPermissionState();
@@ -263,7 +245,6 @@ export default function MapView() {
     ];
 
     setNearbyAtms([]);
-    setAtmStatus("Refreshing nearby ATMs...");
     lastFetchedLocation.current = currentLocation;
 
     const loadNearbyAtms = async () => {
@@ -302,7 +283,6 @@ export default function MapView() {
                 distanceFromCurrentLocation(secondAtm, currentLocation),
             ), currentLocation);
           setNearbyAtms(atms);
-          setAtmStatus(`${atms.length} nearby ATM${atms.length === 1 ? "" : "s"} found`);
           return;
         }
       } catch {
@@ -344,11 +324,6 @@ export default function MapView() {
             ), currentLocation);
 
           setNearbyAtms(atms);
-          setAtmStatus(
-            atms.length
-              ? `${atms.length} nearby ATM${atms.length === 1 ? "" : "s"} found`
-              : "No mapped ATMs found within 5 km",
-          );
           return;
         } catch {
           if (controller.signal.aborted) return;
@@ -357,7 +332,6 @@ export default function MapView() {
 
       const fallbackAtms = ensureAtmCoverage([], currentLocation);
       setNearbyAtms(fallbackAtms);
-      setAtmStatus("Showing nearby ATM locations");
     };
 
     void loadNearbyAtms();
@@ -507,32 +481,37 @@ export default function MapView() {
         }}
       >
         <Card sx={{ p: { xs: 2, md: 2.5 }, borderRadius: 3 }}>
-          <Card
+          <Box
             sx={{
-              p: 2,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
               mb: 2,
+              p: 1.25,
               borderRadius: 3,
               background: "linear-gradient(135deg, #eef8ff 0%, #eafaf5 100%)",
               border: "1px solid #cfe8ff",
             }}
           >
             <Typography variant="h6" sx={{ fontWeight: "bold", color: "#16324F" }}>
-              📍 Allow live location
+              Nearby ATMs
             </Typography>
-            <Typography sx={{ mt: 0.8, color: "#475569", fontSize: 13 }}>
-              Share your current location to get nearby ATM suggestions instantly.
-            </Typography>
-            <Button
-              variant="contained"
-              fullWidth
-              sx={{ mt: 1.5, borderRadius: 2, fontWeight: "bold", background: "linear-gradient(135deg,#16324F,#0F766E)" }}
+            <IconButton
+              aria-label="Refresh live location"
               onClick={requestLiveLocation}
+              sx={{
+                bgcolor: "#ffffff",
+                border: "1px solid #cfe8ff",
+                color: "#16324F",
+                width: 42,
+                height: 42,
+                boxShadow: "none",
+                "&:hover": { bgcolor: "#f0f9ff", borderColor: "#bfeaf5" },
+              }}
             >
-              {locationEnabled ? "Refresh live location" : "Allow Live Location"}
-            </Button>
-          </Card>
-
-          <Typography variant="h6" sx={{ fontWeight: "bold", color: "#16324F" }}>Nearby ATMs</Typography>
+              <RefreshRounded />
+            </IconButton>
+          </Box>
           <Box className="atm-list" sx={{ display: "grid", gap: 1.5, mt: 2 }}>
             {nearbyAtms.map((atm) => {
               const isSelected = atm.id === selectedAtmId;

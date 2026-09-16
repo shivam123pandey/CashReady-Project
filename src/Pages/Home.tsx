@@ -63,11 +63,9 @@ function formatDistance(distanceKm: number) {
 export default function Home() {
   const navigate = useNavigate();
   const [currentLocation, setCurrentLocation] = useState<Coordinates>(defaultLocation);
-  const [locationEnabled, setLocationEnabled] = useState(true);
 
   const requestLiveLocation = () => {
     if (!navigator.geolocation) {
-      setLocationEnabled(false);
       return;
     }
 
@@ -75,11 +73,9 @@ export default function Home() {
       ({ coords }) => {
         const nextLocation: Coordinates = [coords.latitude, coords.longitude];
         setCurrentLocation(nextLocation);
-        setLocationEnabled(true);
       },
       () => {
         setCurrentLocation(defaultLocation);
-        setLocationEnabled(false);
       },
       { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 },
     );
@@ -87,7 +83,6 @@ export default function Home() {
 
   useEffect(() => {
     if (!navigator.geolocation) {
-      setLocationEnabled(false);
       return;
     }
 
@@ -104,8 +99,6 @@ export default function Home() {
       } catch {
         // Ignore unsupported permission API; button will still work.
       }
-
-      setLocationEnabled(true);
     };
 
     void loadPermissionState();
@@ -257,33 +250,6 @@ export default function Home() {
           }}
         >
           <Box sx={{ display: "grid", gap: 2 }}>
-            <Card sx={{ p: 2.2, borderRadius: 3, border: "1px solid #dfe7f1", boxShadow: "none" }}>
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1.2, mb: 1 }}>
-                <Box sx={{ fontSize: 18, color: "#0ea5e9" }}>◉</Box>
-                <Typography sx={{ fontWeight: 700, fontSize: 18, color: "#16324F" }}>
-                  Allow live location
-                </Typography>
-              </Box>
-              <Typography sx={{ color: "#64748B", fontSize: 14, lineHeight: 1.5 }}>
-                Share your current location to get nearby ATM suggestions instantly.
-              </Typography>
-              <Button
-                fullWidth
-                variant="contained"
-                sx={{
-                  mt: 2,
-                  background: "linear-gradient(135deg,#16324F,#0F766E)",
-                  borderRadius: 2,
-                  py: 1.3,
-                  fontWeight: 700,
-                  textTransform: "none",
-                }}
-                onClick={requestLiveLocation}
-              >
-                {locationEnabled ? "Refresh live location" : "Allow live location"}
-              </Button>
-            </Card>
-
             <Box sx={{ p: 0.5 }}>
               <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 1.5 }}>
                 <Typography sx={{ fontWeight: 700, fontSize: 20, color: "#16324F" }}>
