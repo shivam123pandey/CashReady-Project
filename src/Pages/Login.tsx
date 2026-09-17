@@ -11,9 +11,12 @@ import AccountBalanceIcon from "@mui/icons-material/AccountBalance";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import KeyIcon from "@mui/icons-material/Key";
 import QrCode2Icon from "@mui/icons-material/QrCode2";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import jsQR from "jsqr";
+import QRCode from "qrcode";
+import { buildLoginQrPayload, parseLoginQrPayload } from "../lib/qrLogin";
 
 type LoginRole = "customer" | "banker";
 
@@ -40,7 +43,128 @@ export default function Login({ role }: LoginProps) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState("");
+  const [cameraStatus, setCameraStatus] = useState("Ready to scan");
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const details = roleDetails[role];
+
+  const demoUsername = role === "customer" ? "customer@cashready.test" : "banker@cashready.test";
+  const demoPassword = role === "customer" ? "Customer@123" : "Banker@123";
+
+  useEffect(() => {
+    const payload = buildLoginQrPayload(role, demoUsername, demoPassword);
+    QRCode.toDataURL(payload, { width: 220, margin: 1, color: { dark: "#102a5d", light: "#ffffff" } })
+      .then((url: string) => setQrDataUrl(url))
+      .catch(() => setQrDataUrl(""));
+
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+    };
+  }, [role, demoUsername, demoPassword]);
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    setIsCameraOpen(false);
+    setCameraStatus("Ready to scan");
+  };
+
+  const handleScanQr = async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setError("This browser does not support camera scanning.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      });
+
+      streamRef.current = stream;
+      setIsCameraOpen(true);
+      setCameraStatus("Scanning for QR code...");
+      setError("");
+
+      const video = videoRef.current;
+      if (!video) {
+        throw new Error("Camera preview is not ready.");
+      }
+
+      video.srcObject = stream;
+      await video.play();
+
+      const canvas = canvasRef.current ?? document.createElement("canvas");
+      canvasRef.current = canvas;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+
+      if (!context) {
+        throw new Error("Canvas is not available.");
+      }
+
+      const scanFrame = () => {
+        if (!video || !streamRef.current) {
+          return;
+        }
+
+        if (video.readyState < 2) {
+          requestAnimationFrame(scanFrame);
+          return;
+        }
+
+        const width = Math.min(video.videoWidth, 640);
+        const height = Math.min(video.videoHeight, 480);
+        canvas.width = width;
+        canvas.height = height;
+        context.drawImage(video, 0, 0, width, height);
+
+        const image = context.getImageData(0, 0, width, height);
+        const result = jsQR(image.data, image.width, image.height, { inversionAttempts: "dontInvert" });
+
+        if (result) {
+          const payload = parseLoginQrPayload(result.data);
+          if (!payload) {
+            setCameraStatus("Scanned code is not a CashReady login QR");
+            setTimeout(() => {
+              if (streamRef.current) {
+                requestAnimationFrame(scanFrame);
+              }
+            }, 1000);
+            return;
+          }
+
+          setUsername(payload.username);
+          setPassword(payload.password);
+          setCameraStatus("QR found. Login data loaded.");
+          stopCamera();
+          return;
+        }
+
+        requestAnimationFrame(scanFrame);
+      };
+
+      requestAnimationFrame(scanFrame);
+    } catch (scanError) {
+      setError(scanError instanceof Error ? scanError.message : "Unable to access camera.");
+      stopCamera();
+    }
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -283,55 +407,98 @@ export default function Login({ role }: LoginProps) {
           </Box>
 
           <Box
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            gap: 2,
-            mt: 4,
-            p: 2,
-            bgcolor: "#f1f5ff",
-            border: "1px solid #cbd8ff",
-            borderRadius: 2,
-          }}
-        >
-          <Box
             sx={{
-              width: 62,
-              height: 62,
-              display: "grid",
-              placeItems: "center",
-              flexShrink: 0,
-              bgcolor: "#fff",
+              display: "flex",
+              alignItems: "center",
+              gap: 2,
+              mt: 4,
+              p: 2,
+              bgcolor: "#f1f5ff",
+              border: "1px solid #cbd8ff",
               borderRadius: 2,
-              color: "#2444cf",
             }}
           >
-            <QrCode2Icon sx={{ fontSize: 42 }} />
-          </Box>
-          <Box sx={{ flex: 1 }}>
-            <Typography sx={{ fontWeight: 700, color: "#17233d" }}>
-              Login without password
-            </Typography>
-            <Typography variant="body2" sx={{ mt: 0.5, color: "#66738b" }}>
-              Scan with the CashReady mobile app
-            </Typography>
-          </Box>
-          <ArrowForwardIcon sx={{ color: "#2444cf" }} />
+            <Box
+              onClick={handleScanQr}
+              sx={{
+                width: 62,
+                height: 62,
+                display: "grid",
+                placeItems: "center",
+                flexShrink: 0,
+                bgcolor: "#fff",
+                borderRadius: 2,
+                color: "#2444cf",
+                cursor: "pointer",
+              }}
+            >
+              <QrCode2Icon sx={{ fontSize: 42 }} />
+            </Box>
+            <Box sx={{ flex: 1 }}>
+              <Typography sx={{ fontWeight: 700, color: "#17233d" }}>
+                Login without password
+              </Typography>
+              <Typography variant="body2" sx={{ mt: 0.5, color: "#66738b" }}>
+                Scan with the CashReady mobile app
+              </Typography>
+            </Box>
+            <Button
+              type="button"
+              onClick={handleScanQr}
+              sx={{ color: "#2444cf", minWidth: 0, p: 0.5 }}
+              aria-label="Scan QR code"
+            >
+              <ArrowForwardIcon sx={{ color: "#2444cf" }} />
+            </Button>
           </Box>
           <Box
-          sx={{
-            mt: 1,
-            px: 2,
-            py: 1,
-            borderRadius: 1.5,
-            bgcolor: "#318622",
-            color: "#fff",
-            fontWeight: 700,
-            fontSize: 14,
-          }}
-        >
-          Quick and secure login with QR code
+            sx={{
+              mt: 1,
+              px: 2,
+              py: 1,
+              borderRadius: 1.5,
+              bgcolor: "#318622",
+              color: "#fff",
+              fontWeight: 700,
+              fontSize: 14,
+            }}
+          >
+            Quick and secure login with QR code
           </Box>
+
+          {qrDataUrl && (
+            <Box
+              sx={{
+                mt: 2,
+                p: 2,
+                borderRadius: 2,
+                border: "1px solid #d9e5ff",
+                background: "#f8fbff",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 1,
+              }}
+            >
+              <img src={qrDataUrl} alt="CashReady QR login code" style={{ width: 160, height: 160, display: "block" }} />
+              <Typography variant="caption" sx={{ color: "#4c5d7a" }}>
+                Demo QR for {role === "customer" ? "customer" : "banker"} login
+              </Typography>
+            </Box>
+          )}
+
+          {isCameraOpen && (
+            <Box sx={{ mt: 3, border: "1px solid #d5e0ff", borderRadius: 2, overflow: "hidden", bgcolor: "#f5f8ff" }}>
+              <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", maxHeight: 220, display: "block", background: "#000" }} />
+              <canvas ref={canvasRef} style={{ display: "none" }} />
+              <Box sx={{ px: 2, py: 1.5, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <Typography variant="caption" sx={{ color: "#2d3d5c" }}>{cameraStatus}</Typography>
+                <Button type="button" size="small" variant="text" onClick={stopCamera} sx={{ color: "#2444cf" }}>
+                  Close
+                </Button>
+              </Box>
+            </Box>
+          )}
 
           <Divider sx={{ my: 4, color: "#7a8497" }}>Or login with ID</Divider>
 

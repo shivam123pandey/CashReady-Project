@@ -1,13 +1,16 @@
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { dirname, resolve } from "node:path";
+import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { promisify } from "node:util";
 import Database from "better-sqlite3";
 import { buildMLRecommendation, buildMLForecast, predictCashAvailability } from "./atmModel.mjs";
 
-const port = Number(process.env.API_PORT ?? 8788);
+const port = Number(process.env.PORT ?? process.env.API_PORT ?? 8788);
+const staticRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "dist");
+const isStaticBuildAvailable = existsSync(staticRoot);
 const scrypt = promisify(scryptCallback);
 const usersFile = resolve(dirname(fileURLToPath(import.meta.url)), "data/users.json");
 const contactMessagesFile = resolve(dirname(fileURLToPath(import.meta.url)), "data/contact-submissions.json");
@@ -253,6 +256,65 @@ function sendJson(response, statusCode, body) {
   response.end(JSON.stringify(body));
 }
 
+function getContentType(filePath) {
+  const extension = extname(filePath).toLowerCase();
+  switch (extension) {
+    case ".html": return "text/html; charset=utf-8";
+    case ".js": return "text/javascript; charset=utf-8";
+    case ".css": return "text/css; charset=utf-8";
+    case ".json": return "application/json; charset=utf-8";
+    case ".svg": return "image/svg+xml";
+    case ".png": return "image/png";
+    case ".jpg":
+    case ".jpeg": return "image/jpeg";
+    case ".ico": return "image/x-icon";
+    case ".woff": return "font/woff";
+    case ".woff2": return "font/woff2";
+    case ".txt": return "text/plain; charset=utf-8";
+    default: return "application/octet-stream";
+  }
+}
+
+async function serveStaticAsset(response, pathname) {
+  if (!isStaticBuildAvailable) return false;
+
+  const safePath = pathname === "/" ? "/index.html" : pathname;
+  const requestedPath = safePath.replace(/^\/+/, "");
+  if (requestedPath.includes("..")) {
+    sendJson(response, 403, { error: "Forbidden" });
+    return true;
+  }
+
+  const candidatePath = resolve(staticRoot, requestedPath);
+  if (!candidatePath.startsWith(staticRoot)) {
+    sendJson(response, 403, { error: "Forbidden" });
+    return true;
+  }
+
+  try {
+    const fileContent = await readFile(candidatePath);
+    const fileType = getContentType(candidatePath);
+    response.writeHead(200, {
+      "Content-Type": fileType,
+      "Cache-Control": "public, max-age=3600",
+    });
+    response.end(fileContent);
+    return true;
+  } catch {
+    if (safePath !== "/index.html" && !pathname.includes(".")) {
+      try {
+        const fileContent = await readFile(resolve(staticRoot, "index.html"));
+        response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        response.end(fileContent);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+}
+
 function isRateLimited(request) {
   const address = request.socket.remoteAddress ?? "unknown";
   const now = Date.now();
@@ -421,7 +483,7 @@ async function getProviderStatus(query) {
   return normalizeStatus(await upstreamResponse.json());
 }
 
-const server = createServer(async (request, response) => {
+async function handleApiRequest(request, response) {
   const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
 
   if (isRateLimited(request)) {
@@ -617,7 +679,7 @@ const server = createServer(async (request, response) => {
         sendJson(response, 400, { error: "requestedAmount must be greater than zero" });
         return;
       }
-		  if (requestedAmount > customerLimit) {
+      if (requestedAmount > customerLimit) {
         sendJson(response, 400, {
           error: "The requested amount exceeds your daily withdrawal limit.",
           limit: customerLimit,
@@ -679,10 +741,48 @@ const server = createServer(async (request, response) => {
   }
 
   sendJson(response, 404, { error: "Not found" });
+}
+
+const server = createServer(async (request, response) => {
+  const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
+
+  if (requestUrl.pathname.startsWith("/api/")) {
+    await handleApiRequest(request, response);
+    return;
+  }
+
+  if (isStaticBuildAvailable) {
+    const served = await serveStaticAsset(response, requestUrl.pathname);
+    if (served) return;
+  }
+
+  if (request.method === "GET" && !requestUrl.pathname.includes(".")) {
+    const served = await serveStaticAsset(response, "/");
+    if (served) return;
+  }
+
+  sendJson(response, 404, { error: "Not found" });
 });
 
-server.listen(port, () => {
-  cleanupExpiredSessions();
-  setInterval(cleanupExpiredSessions, 15 * 60 * 1000).unref();
-  console.log(`CashReady API listening on http://127.0.0.1:${port}`);
-});
+export default async function handler(request, response) {
+  const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
+  if (requestUrl.pathname.startsWith("/api/")) {
+    await handleApiRequest(request, response);
+    return;
+  }
+
+  if (isStaticBuildAvailable) {
+    const served = await serveStaticAsset(response, requestUrl.pathname);
+    if (served) return;
+  }
+
+  sendJson(response, 404, { error: "Not found" });
+}
+
+if (!process.env.VERCEL) {
+  server.listen(port, () => {
+    cleanupExpiredSessions();
+    setInterval(cleanupExpiredSessions, 15 * 60 * 1000).unref();
+    console.log(`CashReady API listening on http://127.0.0.1:${port}`);
+  });
+}
