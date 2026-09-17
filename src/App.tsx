@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 
 import Landing from "./Pages/Landing";
 import BackupLanding from "./Pages/BackupLanding";
@@ -10,6 +10,14 @@ import BankerDashboard from "./Pages/BankerDashboard";
 import Contact from "./Pages/Contact";
 import SiteHeader from "./Components/SiteHeader";
 import UnderDevelopment from "./Pages/UnderDevelopment";
+
+function ProtectedMap() {
+  const isLoggedIn = Boolean(
+    localStorage.getItem("cashready_token") || sessionStorage.getItem("cashready_token"),
+  );
+
+  return isLoggedIn ? <MapView /> : <Navigate to="/login/customer" replace />;
+}
 
 function App() {
   return (
@@ -53,7 +61,7 @@ function App() {
         <Route path="/cash-movement-report" element={<UnderDevelopment title="Cash movement report" pageKey="cash-movement-report" />} />
         <Route path="/export-center" element={<UnderDevelopment title="Export center" pageKey="export-center" />} />
 
-        <Route path="/map" element={<MapView />} />
+        <Route path="/map" element={<ProtectedMap />} />
 
         <Route
           path="/banker-dashboard"
