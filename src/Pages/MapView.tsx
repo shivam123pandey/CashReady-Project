@@ -148,6 +148,7 @@ export default function MapView() {
     fallbackLocation,
   );
   const [nearbyAtms, setNearbyAtms] = useState<NearbyAtm[]>([]);
+  const [atmLoadStatus, setAtmLoadStatus] = useState<"loading" | "ready" | "fallback" | "empty">("loading");
   const [cashStatus, setCashStatus] = useState<CashStatus>({
     available: null,
     status: "loading",
@@ -244,7 +245,8 @@ export default function MapView() {
       "https://overpass.private.coffee/api/interpreter",
     ];
 
-    setNearbyAtms([]);
+    setNearbyAtms(ensureAtmCoverage([], currentLocation));
+    setAtmLoadStatus("loading");
     lastFetchedLocation.current = currentLocation;
 
     const loadNearbyAtms = async () => {
@@ -283,6 +285,7 @@ export default function MapView() {
                 distanceFromCurrentLocation(secondAtm, currentLocation),
             ), currentLocation);
           setNearbyAtms(atms);
+          setAtmLoadStatus(atms.length ? "ready" : "empty");
           return;
         }
       } catch {
@@ -324,6 +327,7 @@ export default function MapView() {
             ), currentLocation);
 
           setNearbyAtms(atms);
+          setAtmLoadStatus(atms.length ? "ready" : "empty");
           return;
         } catch {
           if (controller.signal.aborted) return;
@@ -332,6 +336,7 @@ export default function MapView() {
 
       const fallbackAtms = ensureAtmCoverage([], currentLocation);
       setNearbyAtms(fallbackAtms);
+      setAtmLoadStatus(fallbackAtms.length ? "fallback" : "empty");
     };
 
     void loadNearbyAtms();
@@ -546,7 +551,7 @@ export default function MapView() {
                 </Box>
               </Card>;
             })}
-            {!nearbyAtms.length && <Typography sx={{ py: 4, color: "#64748B", textAlign: "center" }}>Searching for nearby ATMs...</Typography>}
+            {!nearbyAtms.length && <Typography sx={{ py: 4, color: "#64748B", textAlign: "center" }}>{atmLoadStatus === "loading" ? "Searching for nearby ATMs..." : "No nearby ATMs found"}</Typography>}
           </Box>
         </Card>
 

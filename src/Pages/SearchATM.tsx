@@ -13,7 +13,7 @@ export default function SearchATM() {
     setError("");
     localStorage.setItem("cashready_search_amount", String(value));
     localStorage.setItem("cashready_customer_limit", "75000");
-    navigate("/results");
+    navigate("/map");
   };
   return <Box sx={{ minHeight: "100vh", background: "#F5F7FA", p: 4 }}>
     <Typography variant="h4" sx={{ fontWeight: "bold", color: "#16324F", mb: 4 }}>💵 CashReady Search</Typography>
