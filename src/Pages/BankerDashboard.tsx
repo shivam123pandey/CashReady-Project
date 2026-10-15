@@ -38,7 +38,17 @@ export default function BankerDashboard() {
         const response = await fetch("/api/banker/dashboard", {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
-        const data: { dashboard?: DashboardSnapshot; error?: string } = await response.json();
+
+        const rawText = await response.text().catch(() => "");
+        let data: { dashboard?: DashboardSnapshot; error?: string } = {};
+        if (rawText) {
+          try {
+            data = JSON.parse(rawText) as { dashboard?: DashboardSnapshot; error?: string };
+          } catch {
+            data = {};
+          }
+        }
+
         if (response.status === 401) {
           localStorage.removeItem("cashready_token");
           localStorage.removeItem("cashready_role");
@@ -46,7 +56,11 @@ export default function BankerDashboard() {
           navigate("/login/banker");
           return;
         }
-        if (!response.ok || !data.dashboard) throw new Error(data.error ?? "Unable to load dashboard");
+
+        if (!response.ok || !data.dashboard) {
+          throw new Error(data.error ?? "Unable to load dashboard");
+        }
+
         setSnapshot(data.dashboard);
         setError("");
       } catch (dashboardError) {

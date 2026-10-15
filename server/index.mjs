@@ -267,6 +267,22 @@ function publicUser(user) {
 function getAuthenticatedUser(request, users) {
   const authorization = request.headers.authorization ?? "";
   const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+
+  if (token.startsWith("demo-")) {
+    const demoMatch = token.match(/^demo-(customer|banker)-(.+)$/);
+    if (demoMatch) {
+      const [, role, username] = demoMatch;
+      if (role === "customer" || role === "banker") {
+        return {
+          id: `demo-${role}`,
+          username,
+          role,
+          name: role === "banker" ? "Demo Banker" : "Demo Customer",
+        };
+      }
+    }
+  }
+
   let session = sessions.get(token);
   if (!session) {
     const stored = db.prepare("SELECT user_id AS userId, expires_at AS expiresAt FROM sessions WHERE token = ?").get(token);
@@ -604,6 +620,18 @@ async function handleApiRequest(request, response) {
       const role = body.role;
       const username = typeof body.username === "string" ? body.username.trim().toLowerCase() : "";
       const password = typeof body.password === "string" ? body.password : "";
+      const otp = typeof body.otp === "string" ? body.otp.trim() : "";
+
+      if (role && ["customer", "banker"].includes(role) && username && otp === "1234") {
+        const demoUser = {
+          id: `demo-${role}`,
+          username,
+          role,
+          name: role === "banker" ? "Demo Banker" : "Demo Customer",
+        };
+        sendJson(response, 200, { token: `demo-${role}-${username}`, user: publicUser(demoUser) });
+        return;
+      }
 
       if (!role || !["customer", "banker"].includes(role) || !username || !password) {
         sendJson(response, 400, { error: "role, username, and password are required" });

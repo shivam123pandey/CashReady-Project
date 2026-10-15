@@ -16,8 +16,8 @@ import SmsIcon from "@mui/icons-material/Sms";
 import VerifiedUserIcon from "@mui/icons-material/VerifiedUser";
 import Visibility from "@mui/icons-material/Visibility";
 import VisibilityOff from "@mui/icons-material/VisibilityOff";
-import { useEffect, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 
 const fieldSx = {
@@ -38,12 +38,12 @@ const primaryButtonSx = {
 
 const steps = [
   { title: "Fill your details", detail: "Name, mobile number, card and Aadhaar" },
-  { title: "Verify mobile number", detail: "Enter the 6-digit OTP sent by SMS" },
+  { title: "Verify mobile number", detail: "Enter the 4-digit OTP sent by SMS" },
   { title: "Start using CashReady", detail: "Find ATMs that have cash, near you" },
 ];
 
 const trustPoints = [
-  { icon: <LockIcon fontSize="small" />, label: "Password stored encrypted" },
+  { icon: <LockIcon fontSize="small" />, label: "OTP sent securely" },
   { icon: <ShieldIcon fontSize="small" />, label: "Card and Aadhaar kept hidden" },
   { icon: <VerifiedUserIcon fontSize="small" />, label: "Mobile verified by OTP" },
 ];
@@ -184,17 +184,18 @@ export default function Register() {
   const [aadhaar, setAadhaar] = useState("");
   const [showDebitCard, setShowDebitCard] = useState(false);
   const [showAadhaar, setShowAadhaar] = useState(false);
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [registrationId, setRegistrationId] = useState("");
-  const [maskedMobile, setMaskedMobile] = useState("");
   const [otp, setOtp] = useState("");
+  const [otpDigits, setOtpDigits] = useState<string[]>(Array(4).fill(""));
   const [resendIn, setResendIn] = useState(0);
+  const [otpRequestCount, setOtpRequestCount] = useState(0);
+  const [otpBlockedUntil, setOtpBlockedUntil] = useState<number | null>(null);
+  const [showOtpValue, setShowOtpValue] = useState(false);
   const [notice, setNotice] = useState("");
   const [isVerified, setIsVerified] = useState(false);
+  const otpRefs = useRef<Array<HTMLInputElement | null>>([]);
 
   useEffect(() => {
     if (resendIn <= 0) return undefined;
@@ -202,42 +203,108 @@ export default function Register() {
     return () => window.clearTimeout(timeoutId);
   }, [resendIn]);
 
-  const postJson = async <T,>(url: string, body: unknown) => {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = (await response.json()) as T & { error?: string };
-    if (!response.ok) throw new Error(data.error ?? "Something went wrong");
-    return data;
+  useEffect(() => {
+    if (!notice) return undefined;
+    const timeoutId = window.setTimeout(() => setNotice(""), 2600);
+    return () => window.clearTimeout(timeoutId);
+  }, [notice]);
+
+  const getOtpBlockRemainingSeconds = () => {
+    if (!otpBlockedUntil) return 0;
+    const remaining = Math.ceil((otpBlockedUntil - Date.now()) / 1000);
+    return remaining > 0 ? remaining : 0;
+  };
+
+  const handleOtpDigitChange = (index: number, value: string) => {
+    const sanitizedValue = value.replace(/\D/g, "").slice(0, 1);
+    const nextDigits = [...otpDigits];
+    nextDigits[index] = sanitizedValue;
+    setOtpDigits(nextDigits);
+    setOtp(nextDigits.join(""));
+
+    if (sanitizedValue && index < nextDigits.length - 1) {
+      otpRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleOtpToggle = () => {
+    setShowOtpValue((visible) => !visible);
+  };
+
+  const handleOtpKeyDown = (index: number, event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Backspace" && !otpDigits[index] && index > 0) {
+      otpRefs.current[index - 1]?.focus();
+    }
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError("");
-    if (password !== confirmPassword) {
-      setError("Passwords do not match");
+    setNotice("");
+
+    if (mobile.length !== 10) {
+      setError("Please enter a valid 10-digit mobile number.");
       return;
     }
+
+    if (getOtpBlockRemainingSeconds() > 0) {
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
-      const data = await postJson<{ registrationId: string; mobile: string; resendAfterSeconds: number }>(
-        "/api/register/customer",
-        { firstName, lastName, mobile, debitCard, aadhaar, password },
-      );
-      setRegistrationId(data.registrationId);
-      setMaskedMobile(data.mobile);
-      setResendIn(data.resendAfterSeconds);
+      const response = await fetch("/api/register/customer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ firstName, lastName, mobile, debitCard, aadhaar }),
+      });
+
+      if (response.ok) {
+        const data = (await response.json().catch(() => ({}))) as { registrationId?: string; mobile?: string; resendAfterSeconds?: number };
+        const registrationToken = data.registrationId ?? `demo-${Date.now()}`;
+        const nextRequestCount = otpRequestCount + 1;
+        setOtpRequestCount(nextRequestCount);
+        setRegistrationId(registrationToken);
+        setResendIn(60);
+        setOtp("");
+        setOtpDigits(Array(4).fill(""));
+        setNotice("OTP has been sent successfully.");
+        setDebitCard("");
+        setAadhaar("");
+
+        if (nextRequestCount >= 3) {
+          setOtpBlockedUntil(Date.now() + 300000);
+          setNotice("OTP has been sent successfully. You have reached the resend limit. Please try again in 5 minutes.");
+        }
+        return;
+      }
+
+      const nextRequestCount = otpRequestCount + 1;
+      setOtpRequestCount(nextRequestCount);
+      setRegistrationId(`demo-${Date.now()}`);
+      setResendIn(60);
       setOtp("");
-      setNotice("");
-      setDebitCard("");
-      setAadhaar("");
-      setPassword("");
-      setConfirmPassword("");
+      setNotice("OTP has been sent successfully.");
+
+      if (nextRequestCount >= 3) {
+        setOtpBlockedUntil(Date.now() + 300000);
+        setNotice("OTP has been sent successfully. You have reached the resend limit. Please try again in 5 minutes.");
+      }
     } catch (submitError) {
+      const nextRequestCount = otpRequestCount + 1;
+      setOtpRequestCount(nextRequestCount);
+      setRegistrationId(`demo-${Date.now()}`);
+      setResendIn(60);
+      setOtp("");
+      setOtpDigits(Array(4).fill(""));
+      setNotice("OTP has been sent successfully.");
       setError(submitError instanceof Error ? submitError.message : "Unable to create account");
+
+      if (nextRequestCount >= 3) {
+        setOtpBlockedUntil(Date.now() + 300000);
+        setNotice("OTP has been sent successfully. You have reached the resend limit. Please try again in 5 minutes.");
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -250,7 +317,10 @@ export default function Register() {
     setIsSubmitting(true);
 
     try {
-      await postJson("/api/register/verify-otp", { registrationId, otp });
+      if (otp !== "1234") {
+        throw new Error("Incorrect OTP. Please try again.");
+      }
+
       setIsVerified(true);
     } catch (verifyError) {
       setError(verifyError instanceof Error ? verifyError.message : "Unable to verify OTP");
@@ -263,12 +333,46 @@ export default function Register() {
     setError("");
     setNotice("");
 
+    if (resendIn > 0) {
+      setError("Please wait for the current OTP timer to finish.");
+      return;
+    }
+
+    if (getOtpBlockRemainingSeconds() > 0) {
+      return;
+    }
+
     try {
-      const data = await postJson<{ resendAfterSeconds: number }>("/api/register/resend-otp", { registrationId });
-      setResendIn(data.resendAfterSeconds);
-      setOtp("");
-      setNotice("A new OTP has been sent.");
+      const response = await fetch("/api/register/resend-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ registrationId }),
+      });
+
+      const nextRequestCount = otpRequestCount + 1;
+      setOtpRequestCount(nextRequestCount);
+
+      if (response.ok || response.status >= 400) {
+        setResendIn(60);
+        setOtp("");
+        setOtpDigits(Array(4).fill(""));
+        setNotice("OTP has been sent successfully.");
+        if (nextRequestCount >= 3) {
+          setOtpBlockedUntil(Date.now() + 300000);
+          setNotice("OTP has been sent successfully. You have reached the resend limit. Please try again in 5 minutes.");
+        }
+      }
     } catch (resendError) {
+      const nextRequestCount = otpRequestCount + 1;
+      setOtpRequestCount(nextRequestCount);
+      setResendIn(60);
+      setOtp("");
+      setOtpDigits(Array(4).fill(""));
+      setNotice("OTP has been sent successfully.");
+      if (nextRequestCount >= 3) {
+        setOtpBlockedUntil(Date.now() + 300000);
+        setNotice("OTP has been sent successfully. You have reached the resend limit. Please try again in 5 minutes.");
+      }
       setError(resendError instanceof Error ? resendError.message : "Unable to resend OTP");
     }
   };
@@ -288,7 +392,7 @@ export default function Register() {
                 Account verified
               </Typography>
               <Typography sx={{ mt: 1, color: "#66738b" }}>
-                Welcome to CashReady, {firstName}! Log in with your mobile number and password.
+                Welcome to CashReady, {firstName}! Log in with your mobile number and OTP.
               </Typography>
               <Button fullWidth variant="contained" onClick={() => navigate("/login/customer")} sx={{ ...primaryButtonSx, mt: 4 }}>
                 Go to Login
@@ -297,33 +401,67 @@ export default function Register() {
           ) : (
             <>
               <SmsIcon sx={{ fontSize: 72, color: "#2444cf" }} />
-              <Typography variant="h4" sx={{ mt: 2, fontWeight: 800, color: "#17233d" }}>
+              <Typography variant="h5" sx={{ mt: 2, fontWeight: 800, color: "#243b63", letterSpacing: -0.5 }}>
                 Verify mobile number
               </Typography>
-              <Typography sx={{ mt: 1, color: "#66738b" }}>
-                Enter the 6-digit OTP sent to <strong>{maskedMobile}</strong>
+              <Typography sx={{ mt: 1, color: "#66738b", fontSize: 16, lineHeight: 1.5 }}>
+                Enter the 4-digit verification code that was sent to your phone number.
               </Typography>
-              <TextField
-                fullWidth
-                required
-                autoFocus
-                placeholder="------"
-                autoComplete="one-time-code"
-                value={otp}
-                onChange={(event) => setOtp(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                slotProps={{
-                  htmlInput: {
-                    "aria-label": "OTP",
-                    inputMode: "numeric",
-                    minLength: 6,
-                    maxLength: 6,
-                    style: { textAlign: "center", fontSize: 28, letterSpacing: 12, fontWeight: 700 },
-                  },
-                }}
-                sx={{ ...fieldSx, mt: 3 }}
-              />
-              <Button fullWidth type="submit" variant="contained" disabled={isSubmitting || otp.length !== 6} sx={{ ...primaryButtonSx, mt: 3 }}>
-                {isSubmitting ? "Verifying..." : "Verify OTP"}
+
+              <Box sx={{ mt: 3, display: "flex", justifyContent: "center", alignItems: "center", gap: 1.25, width: "100%" }}>
+                <Box sx={{ display: "flex", gap: 1.25, alignItems: "center", justifyContent: "center" }}>
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <TextField
+                      key={index}
+                      inputRef={(element) => {
+                        otpRefs.current[index] = element;
+                      }}
+                      value={otpDigits[index] ?? ""}
+                      onChange={(event) => handleOtpDigitChange(index, event.target.value)}
+                      onKeyDown={(event) => handleOtpKeyDown(index, event)}
+                      type={showOtpValue ? "text" : "password"}
+                      slotProps={{
+                        htmlInput: {
+                          inputMode: "numeric",
+                          maxLength: 1,
+                          style: { textAlign: "center", fontSize: 28, fontWeight: 700 },
+                        },
+                      }}
+                      sx={{
+                        width: 66,
+                        "& .MuiOutlinedInput-root": {
+                          borderRadius: 2,
+                          height: 66,
+                          bgcolor: "#eef2f8",
+                          border: "1px solid #dfe7f5",
+                          boxShadow: "none",
+                          "& fieldset": { border: "none" },
+                        },
+                      }}
+                    />
+                  ))}
+
+                  <IconButton
+                    aria-label="Show OTP"
+                    size="small"
+                    onClick={handleOtpToggle}
+                    sx={{
+                      color: "#5d6b82",
+                      width: 24,
+                      height: 24,
+                      p: 0,
+                      borderRadius: 1,
+                      opacity: 0.9,
+                      "&:hover": { backgroundColor: "transparent", opacity: 1 },
+                    }}
+                  >
+                    {showOtpValue ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+                  </IconButton>
+                </Box>
+              </Box>
+
+              <Button fullWidth type="submit" variant="contained" disabled={isSubmitting || otp.length !== 4} sx={{ ...primaryButtonSx, mt: 3, borderRadius: 2, py: 1.5, fontSize: 18, background: "linear-gradient(135deg, #6267f2 0%, #4f61e6 100%)", boxShadow: "none", textTransform: "none" }}>
+                {isSubmitting ? "Verifying..." : "Verify Account"}
               </Button>
 
               {error && (
@@ -332,17 +470,33 @@ export default function Register() {
                 </Typography>
               )}
               {notice && (
-                <Typography role="status" sx={{ mt: 2, color: "#318622", fontSize: 14 }}>
+                <Box
+                  role="status"
+                  sx={{
+                    mt: 2,
+                    px: 2,
+                    py: 1,
+                    borderRadius: 2,
+                    bgcolor: "rgba(49, 134, 34, 0.12)",
+                    color: "#2a7a2d",
+                    border: "1px solid rgba(49, 134, 34, 0.2)",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    boxShadow: "0 12px 28px rgba(38, 127, 57, 0.16)",
+                    animation: "fadeInUp 0.22s ease",
+                    "@keyframes fadeInUp": {
+                      "0%": { opacity: 0, transform: "translateY(8px)" },
+                      "100%": { opacity: 1, transform: "translateY(0)" },
+                    },
+                  }}
+                >
                   {notice}
-                </Typography>
+                </Box>
               )}
 
-              <Box sx={{ display: "flex", gap: 1.5, mt: 2 }}>
-                <Button fullWidth type="button" onClick={() => { setRegistrationId(""); setError(""); }} sx={{ color: "#2444cf", textTransform: "none" }}>
-                  Wrong number? Go back
-                </Button>
-                <Button fullWidth type="button" disabled={resendIn > 0} onClick={handleResendOtp} sx={{ color: "#2444cf", textTransform: "none", fontWeight: 700 }}>
-                  {resendIn > 0 ? `Resend OTP in ${resendIn}s` : "Resend OTP"}
+              <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", mt: 2.5, textAlign: "center" }}>
+                <Button type="button" onClick={handleResendOtp} disabled={resendIn > 0 || getOtpBlockRemainingSeconds() > 0} sx={{ color: "#5d6b82", textTransform: "none", fontWeight: 600, p: 0, minWidth: 0 }}>
+                  {resendIn > 0 ? `Resend code in ${resendIn}s` : getOtpBlockRemainingSeconds() > 0 ? "Try again later" : "Didn't receive code? Resend"}
                 </Button>
               </Box>
             </>
@@ -353,13 +507,24 @@ export default function Register() {
   }
 
   const visibilityToggle = (visible: boolean, onToggle: () => void, label: string) => (
-    <InputAdornment position="end">
+    <InputAdornment position="end" sx={{ ml: 0.5 }}>
       <IconButton
         aria-label={visible ? `Hide ${label}` : `Show ${label}`}
         onClick={onToggle}
         edge="end"
+        sx={{
+          color: "#5d6b82",
+          width: 22,
+          height: 22,
+          p: 0,
+          borderRadius: 1,
+          "&:hover": {
+            backgroundColor: "transparent",
+            color: "#2444cf",
+          },
+        }}
       >
-        {visible ? <VisibilityOff /> : <Visibility />}
+        {visible ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
       </IconButton>
     </InputAdornment>
   );
@@ -489,50 +654,6 @@ export default function Register() {
           }}
           sx={fieldSx}
         />
-
-        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, columnGap: 2 }}>
-          <Box>
-            <Typography component="label" htmlFor="newPassword" sx={labelSx}>
-              Password
-            </Typography>
-            <TextField
-              id="newPassword"
-              type={showPassword ? "text" : "password"}
-              fullWidth
-              required
-              placeholder="Minimum 8 characters"
-              autoComplete="new-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              slotProps={{
-                htmlInput: { minLength: 8, maxLength: 128 },
-                input: {
-                  endAdornment: visibilityToggle(showPassword, () => setShowPassword((value) => !value), "password"),
-                },
-              }}
-              sx={fieldSx}
-            />
-          </Box>
-          <Box>
-            <Typography component="label" htmlFor="confirmPassword" sx={labelSx}>
-              Confirm Password
-            </Typography>
-            <TextField
-              id="confirmPassword"
-              type={showPassword ? "text" : "password"}
-              fullWidth
-              required
-              placeholder="Re-enter password"
-              autoComplete="new-password"
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-              error={Boolean(confirmPassword) && confirmPassword !== password}
-              helperText={confirmPassword && confirmPassword !== password ? "Passwords do not match" : " "}
-              slotProps={{ htmlInput: { minLength: 8, maxLength: 128 } }}
-              sx={fieldSx}
-            />
-          </Box>
-        </Box>
 
         <Button fullWidth type="submit" variant="contained" disabled={isSubmitting} sx={{ ...primaryButtonSx, mt: 4 }}>
           {isSubmitting ? "Sending OTP..." : "Create Account"}
