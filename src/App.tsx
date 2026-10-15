@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 import Landing from "./Pages/Landing";
 import BackupLanding from "./Pages/BackupLanding";
 import Login from "./Pages/Login";
+import Register from "./Pages/Register";
 import SearchATM from "./Pages/SearchATM";
 import Results from "./Pages/Results";
 import MapView from "./Pages/MapView";
@@ -40,6 +41,8 @@ function App() {
           path="/login/banker"
           element={<Login role="banker" />}
         />
+
+        <Route path="/register/customer" element={<Register />} />
 
         <Route
           path="/customer-dashboard"

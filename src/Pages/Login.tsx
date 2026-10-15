@@ -507,13 +507,13 @@ export default function Login({ role }: LoginProps) {
           htmlFor="username"
           sx={{ fontWeight: 700, color: "#17233d" }}
         >
-          {role === "customer" ? "Customer ID / User ID" : "Employee ID / User ID"}
+          {role === "customer" ? "Mobile Number / User ID" : "Employee ID / User ID"}
           </Typography>
           <TextField
           id="username"
           fullWidth
           required
-          placeholder="Enter your user ID"
+          placeholder={role === "customer" ? "Enter your mobile number or user ID" : "Enter your user ID"}
           slotProps={{ htmlInput: { "aria-label": "Username" } }}
           value={username}
           onChange={(event) => setUsername(event.target.value)}
@@ -577,14 +577,28 @@ export default function Login({ role }: LoginProps) {
             </Typography>
           )}
 
-          <Button
-          fullWidth
-          type="button"
-          onClick={() => navigate("/")}
-          sx={{ mt: 1.5, color: "#2444cf", textTransform: "none" }}
-        >
-          Back to Home
-          </Button>
+          <Box sx={{ display: "flex", gap: 1.5, mt: 1.5 }}>
+            <Button
+            fullWidth
+            type="button"
+            variant="outlined"
+            onClick={() => navigate("/")}
+            sx={{ color: "#2444cf", borderColor: "#2444cf", borderRadius: 2, textTransform: "none", fontWeight: 700 }}
+          >
+            Back to Home
+            </Button>
+            {role === "customer" && (
+              <Button
+              fullWidth
+              type="button"
+              variant="outlined"
+              onClick={() => navigate("/register/customer")}
+              sx={{ color: "#2444cf", borderColor: "#2444cf", borderRadius: 2, textTransform: "none", fontWeight: 700 }}
+            >
+              New Customer
+              </Button>
+            )}
+          </Box>
         </Box>
       </Card>
     </Box>

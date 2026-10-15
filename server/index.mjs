@@ -1,4 +1,4 @@
-import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomInt, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -25,6 +25,13 @@ const sessionTtlMs = Number(process.env.SESSION_TTL_MS ?? 8 * 60 * 60 * 1000);
 const rateWindowMs = 60 * 1000;
 const rateLimit = Number(process.env.API_RATE_LIMIT ?? 120);
 const requestCounts = new Map();
+const otpTtlMs = 10 * 60 * 1000;
+const otpResendCooldownMs = 30 * 1000;
+const otpMaxAttempts = 5;
+const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID;
+const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
+const twilioVerifyServiceSid = process.env.TWILIO_VERIFY_SERVICE_SID;
+const isTwilioConfigured = Boolean(twilioAccountSid && twilioAuthToken && twilioVerifyServiceSid);
 const db = new Database(databasePath);
 db.pragma("journal_mode = WAL");
 db.exec(`
@@ -63,6 +70,31 @@ db.exec(`
     user_id TEXT NOT NULL,
     expires_at INTEGER NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
+// The first version of registration verified customers by email. Keep those rows aside instead of
+// dropping them; customers they verified already live in the users table.
+if (db.prepare("PRAGMA table_info(customer_registrations)").all().some((column) => column.name === "email")) {
+  db.exec("ALTER TABLE customer_registrations RENAME TO customer_registrations_email_legacy");
+}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS customer_registrations (
+    id TEXT PRIMARY KEY,
+    first_name TEXT NOT NULL,
+    last_name TEXT NOT NULL,
+    mobile TEXT NOT NULL UNIQUE,
+    card_last4 TEXT NOT NULL,
+    aadhaar_last4 TEXT NOT NULL,
+    password_hash TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    otp_hash TEXT,
+    otp_expires_at INTEGER,
+    otp_attempts INTEGER NOT NULL DEFAULT 0,
+    otp_sent_at INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    verified_at TEXT
   );
 `);
 
@@ -153,6 +185,71 @@ async function saveContactMessage(payload) {
 
   await loadContactMessages();
   return message;
+}
+
+function hashOtp(registrationId, otp) {
+  return createHash("sha256").update(`${registrationId}:${otp}`).digest("hex");
+}
+
+function maskMobile(mobile) {
+  return `+91 ${mobile.slice(0, 2)}XXXXXX${mobile.slice(-2)}`;
+}
+
+// Accepts "9876543210", "+91 98765 43210" or "09876543210" and returns the 10-digit number.
+function normalizeMobile(value) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  const local = digits.length === 12 && digits.startsWith("91") ? digits.slice(2)
+    : digits.length === 11 && digits.startsWith("0") ? digits.slice(1)
+    : digits;
+  return /^[6-9]\d{9}$/.test(local) ? local : "";
+}
+
+async function callTwilioVerify(path, params) {
+  const response = await fetch(`https://verify.twilio.com/v2/Services/${twilioVerifyServiceSid}/${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${twilioAccountSid}:${twilioAuthToken}`).toString("base64")}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams(params),
+    signal: AbortSignal.timeout(10000),
+  });
+  const data = await response.json().catch(() => ({}));
+  return { ok: response.ok, status: response.status, data };
+}
+
+// Sends an OTP to the registration's mobile. With Twilio, Twilio generates and stores the code;
+// without it (local development) we generate one, keep only its hash, and print it to the console.
+async function sendRegistrationOtp(registration) {
+  if (isTwilioConfigured) {
+    const result = await callTwilioVerify("Verifications", { To: `+91${registration.mobile}`, Channel: "sms" });
+    if (!result.ok) {
+      console.error("Twilio send failed", result.status, result.data?.message);
+      throw new Error(result.data?.message ?? "SMS service rejected the request");
+    }
+    db.prepare("UPDATE customer_registrations SET otp_hash = NULL, otp_expires_at = ?, otp_attempts = 0, otp_sent_at = ? WHERE id = ?")
+      .run(Date.now() + otpTtlMs, Date.now(), registration.id);
+    return;
+  }
+
+  const otp = String(randomInt(0, 1000000)).padStart(6, "0");
+  db.prepare("UPDATE customer_registrations SET otp_hash = ?, otp_expires_at = ?, otp_attempts = 0, otp_sent_at = ? WHERE id = ?")
+    .run(hashOtp(registration.id, otp), Date.now() + otpTtlMs, Date.now(), registration.id);
+  console.log(`[CashReady] Twilio not configured. OTP for +91${registration.mobile}: ${otp}`);
+}
+
+async function checkRegistrationOtp(registration, otp) {
+  if (isTwilioConfigured) {
+    const result = await callTwilioVerify("VerificationCheck", { To: `+91${registration.mobile}`, Code: otp });
+    // Twilio answers 404 once the verification expired or ran out of attempts.
+    if (result.status === 404) return false;
+    if (!result.ok) throw new Error(result.data?.message ?? "SMS service rejected the request");
+    return result.data?.status === "approved";
+  }
+
+  const expected = Buffer.from(registration.otp_hash ?? "", "hex");
+  const actual = Buffer.from(hashOtp(registration.id, otp), "hex");
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
 function createSession(user) {
@@ -513,8 +610,17 @@ async function handleApiRequest(request, response) {
         return;
       }
 
+      // Registered customers sign in with their mobile number, typed with or without +91.
+      const loginName = role === "customer" ? normalizeMobile(username) || username : username;
       const users = await loadUsers();
-      const user = users.find((candidate) => candidate.username === username && candidate.role === role);
+      const user = users.find((candidate) => candidate.username === loginName && candidate.role === role);
+      if (!user && role === "customer") {
+        const pending = db.prepare("SELECT status FROM customer_registrations WHERE mobile = ?").get(loginName);
+        if (pending?.status === "pending") {
+          sendJson(response, 403, { error: "Please verify your mobile number with the OTP before logging in." });
+          return;
+        }
+      }
       if (!user || !(await verifyPassword(password, user.passwordHash))) {
         sendJson(response, 401, { error: "Invalid credentials" });
         return;
@@ -573,6 +679,174 @@ async function handleApiRequest(request, response) {
     } catch (error) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "Invalid request" });
     }
+    return;
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === "/api/register/customer") {
+    let body;
+    try {
+      body = await readJsonBody(request);
+    } catch (error) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Invalid request" });
+      return;
+    }
+
+    const firstName = typeof body.firstName === "string" ? body.firstName.trim() : "";
+    const lastName = typeof body.lastName === "string" ? body.lastName.trim() : "";
+    const mobile = normalizeMobile(body.mobile);
+    const debitCard = typeof body.debitCard === "string" ? body.debitCard.replace(/\s/g, "") : "";
+    const aadhaar = typeof body.aadhaar === "string" ? body.aadhaar.replace(/\s/g, "") : "";
+    const password = typeof body.password === "string" ? body.password : "";
+
+    if (!firstName || !lastName) {
+      sendJson(response, 400, { error: "First name and last name are required" });
+      return;
+    }
+    if (!mobile) {
+      sendJson(response, 400, { error: "Enter a valid 10-digit Indian mobile number" });
+      return;
+    }
+    if (!/^\d{16}$/.test(debitCard)) {
+      sendJson(response, 400, { error: "Debit card number must be 16 digits" });
+      return;
+    }
+    if (!/^\d{12}$/.test(aadhaar)) {
+      sendJson(response, 400, { error: "Aadhaar number must be 12 digits" });
+      return;
+    }
+    if (password.length < 8 || password.length > 128) {
+      sendJson(response, 400, { error: "Password must be at least 8 characters" });
+      return;
+    }
+
+    await seedDemoUsers();
+    const existing = db.prepare("SELECT * FROM customer_registrations WHERE mobile = ?").get(mobile);
+    const existingUser = db.prepare("SELECT id FROM users WHERE username = ? AND role = 'customer'").get(mobile);
+    if (existing?.status === "verified" || existingUser) {
+      sendJson(response, 409, { error: "An account with this mobile number already exists" });
+      return;
+    }
+    const waitMs = existing?.otp_sent_at ? existing.otp_sent_at + otpResendCooldownMs - Date.now() : 0;
+    if (waitMs > 0) {
+      sendJson(response, 429, { error: `Please wait ${Math.ceil(waitMs / 1000)} seconds before requesting a new OTP` });
+      return;
+    }
+
+    const id = existing?.id ?? randomBytes(16).toString("hex");
+    // Only the last 4 digits of the card and Aadhaar are stored; full numbers never touch the database.
+    db.prepare(`
+      INSERT INTO customer_registrations (id, first_name, last_name, mobile, card_last4, aadhaar_last4, password_hash, status)
+      VALUES (@id, @firstName, @lastName, @mobile, @cardLast4, @aadhaarLast4, @passwordHash, 'pending')
+      ON CONFLICT(mobile) DO UPDATE SET
+        first_name = excluded.first_name,
+        last_name = excluded.last_name,
+        card_last4 = excluded.card_last4,
+        aadhaar_last4 = excluded.aadhaar_last4,
+        password_hash = excluded.password_hash
+    `).run({
+      id,
+      firstName,
+      lastName,
+      mobile,
+      cardLast4: debitCard.slice(-4),
+      aadhaarLast4: aadhaar.slice(-4),
+      passwordHash: await hashPassword(password),
+    });
+
+    try {
+      await sendRegistrationOtp({ id, mobile });
+    } catch (error) {
+      sendJson(response, 502, { error: `Unable to send OTP: ${error instanceof Error ? error.message : "SMS service unavailable"}` });
+      return;
+    }
+
+    sendJson(response, 200, {
+      registrationId: id,
+      mobile: maskMobile(mobile),
+      resendAfterSeconds: otpResendCooldownMs / 1000,
+    });
+    return;
+  }
+
+  if (request.method === "POST" && ["/api/register/resend-otp", "/api/register/verify-otp"].includes(requestUrl.pathname)) {
+    let body;
+    try {
+      body = await readJsonBody(request);
+    } catch (error) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Invalid request" });
+      return;
+    }
+
+    const registrationId = typeof body.registrationId === "string" ? body.registrationId : "";
+    const registration = db.prepare("SELECT * FROM customer_registrations WHERE id = ?").get(registrationId);
+    if (registration?.status === "verified") {
+      sendJson(response, 409, { error: "This mobile number is already verified. Please log in." });
+      return;
+    }
+    if (!registration || registration.status !== "pending" || !registration.password_hash) {
+      sendJson(response, 404, { error: "Registration not found. Please fill the form again." });
+      return;
+    }
+
+    if (requestUrl.pathname === "/api/register/resend-otp") {
+      const waitMs = (registration.otp_sent_at ?? 0) + otpResendCooldownMs - Date.now();
+      if (waitMs > 0) {
+        sendJson(response, 429, { error: `Please wait ${Math.ceil(waitMs / 1000)} seconds before requesting a new OTP` });
+        return;
+      }
+      try {
+        await sendRegistrationOtp(registration);
+      } catch (error) {
+        sendJson(response, 502, { error: `Unable to send OTP: ${error instanceof Error ? error.message : "SMS service unavailable"}` });
+        return;
+      }
+      sendJson(response, 200, { ok: true, resendAfterSeconds: otpResendCooldownMs / 1000 });
+      return;
+    }
+
+    const otp = typeof body.otp === "string" ? body.otp.trim() : "";
+    if (!/^\d{6}$/.test(otp)) {
+      sendJson(response, 400, { error: "Enter the 6-digit OTP" });
+      return;
+    }
+    if (!registration.otp_expires_at || registration.otp_expires_at <= Date.now()) {
+      sendJson(response, 400, { error: "OTP expired. Please tap Resend OTP." });
+      return;
+    }
+    if (registration.otp_attempts >= otpMaxAttempts) {
+      sendJson(response, 429, { error: "Too many wrong attempts. Please tap Resend OTP." });
+      return;
+    }
+
+    // Count the attempt before checking so parallel guesses cannot bypass the limit.
+    db.prepare("UPDATE customer_registrations SET otp_attempts = otp_attempts + 1 WHERE id = ?").run(registration.id);
+    let isValid;
+    try {
+      isValid = await checkRegistrationOtp(registration, otp);
+    } catch (error) {
+      sendJson(response, 502, { error: `Unable to verify OTP: ${error instanceof Error ? error.message : "SMS service unavailable"}` });
+      return;
+    }
+    if (!isValid) {
+      const attemptsLeft = Math.max(0, otpMaxAttempts - registration.otp_attempts - 1);
+      sendJson(response, 400, {
+        error: attemptsLeft ? `Wrong OTP. ${attemptsLeft} attempt${attemptsLeft === 1 ? "" : "s"} left.` : "Too many wrong attempts. Please tap Resend OTP.",
+      });
+      return;
+    }
+
+    db.transaction(() => {
+      db.prepare(`
+        INSERT INTO users (id, username, role, name, password_hash)
+        VALUES (?, ?, 'customer', ?, ?)
+      `).run(`customer-${registration.id}`, registration.mobile, `${registration.first_name} ${registration.last_name}`, registration.password_hash);
+      db.prepare(`
+        UPDATE customer_registrations
+        SET status = 'verified', otp_hash = NULL, otp_expires_at = NULL, password_hash = NULL, verified_at = ?
+        WHERE id = ?
+      `).run(new Date().toISOString(), registration.id);
+    })();
+    sendJson(response, 200, { ok: true, status: "verified" });
     return;
   }
 
