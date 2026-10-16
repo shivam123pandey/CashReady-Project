@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { Alert, Snackbar } from "@mui/material";
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import CashReadyLogo from "./CashReadyLogo";
 
@@ -7,8 +8,25 @@ export default function SiteHeader() {
   const location = useLocation();
   const [loginOpen, setLoginOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
   const isBanker = localStorage.getItem("cashready_role") === "banker";
   const isLoggedIn = Boolean(localStorage.getItem("cashready_token") || sessionStorage.getItem("cashready_token"));
+
+  useEffect(() => {
+    const routeState = location.state;
+    if (
+      !routeState ||
+      typeof routeState !== "object" ||
+      !("successMessage" in routeState) ||
+      typeof routeState.successMessage !== "string"
+    ) {
+      return;
+    }
+
+    setSuccessMessage(routeState.successMessage);
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }, [location.pathname, location.search, location.state, navigate]);
+
   const openAtmLocator = () => {
     navigate(isLoggedIn ? "/map" : "/login/customer");
   };
@@ -114,6 +132,21 @@ export default function SiteHeader() {
           )}
         </div>
       </header>
+      <Snackbar
+        open={Boolean(successMessage)}
+        autoHideDuration={5000}
+        onClose={() => setSuccessMessage("")}
+        anchorOrigin={{ vertical: "top", horizontal: "center" }}
+      >
+        <Alert
+          onClose={() => setSuccessMessage("")}
+          severity="success"
+          variant="filled"
+          sx={{ width: "100%" }}
+        >
+          {successMessage}
+        </Alert>
+      </Snackbar>
       <nav className="main-nav" aria-label="Main navigation">
         <button className={isActive(["/", "/home"]) ? "active" : ""} type="button" onClick={() => navigate("/home")}>Dashboard</button>
         <button className={isActive(["/map"]) ? "active" : ""} type="button" onClick={openAtmLocator}>ATM Locator</button>

@@ -65,6 +65,11 @@ export default function Login({ role }: LoginProps) {
   const MAX_OTP_REQUESTS = 3;
   const OTP_COOLDOWN_SECONDS = 60;
   const OTP_BLOCK_DURATION_SECONDS = 300;
+  const navigateAfterLogin = () => {
+    navigate(details.destination, {
+      state: { successMessage: "Logged in successfully. Welcome to CashReady!" },
+    });
+  };
 
   useEffect(() => {
     const payload = buildLoginQrPayload(role, demoUsername, demoPassword);
@@ -286,7 +291,7 @@ export default function Login({ role }: LoginProps) {
         localStorage.setItem("cashready_token", data.token);
         localStorage.setItem("cashready_role", role);
         sessionStorage.setItem("cashready_token", data.token);
-        navigate(details.destination);
+        navigateAfterLogin();
         return;
       }
 
@@ -294,13 +299,13 @@ export default function Login({ role }: LoginProps) {
       localStorage.setItem("cashready_token", demoToken);
       localStorage.setItem("cashready_role", role);
       sessionStorage.setItem("cashready_token", demoToken);
-      navigate(details.destination);
+      navigateAfterLogin();
     } catch (loginError) {
       const demoToken = `demo-${role}-${username}`;
       localStorage.setItem("cashready_token", demoToken);
       localStorage.setItem("cashready_role", role);
       sessionStorage.setItem("cashready_token", demoToken);
-      navigate(details.destination);
+      navigateAfterLogin();
       if (loginError instanceof Error && loginError.message) {
         setError(loginError.message);
       }
