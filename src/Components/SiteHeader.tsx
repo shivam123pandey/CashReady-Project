@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import CashReadyLogo from "./CashReadyLogo";
 
 export default function SiteHeader() {
   const navigate = useNavigate();
@@ -46,16 +47,7 @@ export default function SiteHeader() {
   return (
     <div className="site-header-shell">
       <header className="brand-header">
-        <button className="brand-lockup" type="button" onClick={() => navigate("/")}>
-          <span className="brand-icon" aria-hidden="true">
-            <span className="brand-machine">
-              <span className="brand-screen" />
-              <span className="brand-slot" />
-            </span>
-            <span className="brand-cash-icon">₹</span>
-          </span>
-          <span className="brand-wordmark"><span>Cash</span>Ready</span>
-        </button>
+        <CashReadyLogo />
         <div className="site-search">
           <span>⌕</span>
           <input

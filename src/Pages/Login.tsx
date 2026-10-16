@@ -7,7 +7,6 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import AccountBalanceIcon from "@mui/icons-material/AccountBalance";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import QrCode2Icon from "@mui/icons-material/QrCode2";
 import Visibility from "@mui/icons-material/Visibility";
@@ -18,6 +17,7 @@ import { useNavigate } from "react-router-dom";
 import jsQR from "jsqr";
 import QRCode from "qrcode";
 import { buildLoginQrPayload, parseLoginQrPayload } from "../lib/qrLogin";
+import CashReadyLogo from "../Components/CashReadyLogo";
 
 type LoginRole = "customer" | "banker";
 
@@ -451,34 +451,11 @@ export default function Login({ role }: LoginProps) {
           onSubmit={handleSubmit}
           sx={{ p: { xs: 3, sm: 6, lg: 9 }, bgcolor: "#fff" }}
         >
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
-          <Box
-            sx={{
-              width: 42,
-              height: 42,
-              display: "grid",
-              placeItems: "center",
-              borderRadius: 1.5,
-              color: "#2444cf",
-              bgcolor: "#edf1ff",
-            }}
-          >
-            <AccountBalanceIcon />
-          </Box>
-          <Box>
-            <Typography
-              variant="h5"
-              sx={{ fontWeight: 800, color: "#17233d", lineHeight: 1.1 }}
-            >
-              CashReady
-            </Typography>
-            <Typography
-              variant="caption"
-              sx={{ color: "#71809b", letterSpacing: 1.2 }}
-            >
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
+            <CashReadyLogo className="brand-lockup brand-lockup--auth" />
+            <Typography variant="caption" sx={{ color: "#71809b", letterSpacing: 1.2 }}>
               AI BANKING PLATFORM
             </Typography>
-          </Box>
           </Box>
 
           <Typography

@@ -7,7 +7,6 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import AccountBalanceIcon from "@mui/icons-material/AccountBalance";
 import CheckIcon from "@mui/icons-material/Check";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import LockIcon from "@mui/icons-material/Lock";
@@ -19,6 +18,7 @@ import VisibilityOff from "@mui/icons-material/VisibilityOff";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
+import CashReadyLogo from "../Components/CashReadyLogo";
 
 const fieldSx = {
   mt: 1,
@@ -532,28 +532,11 @@ export default function Register() {
   return (
     <RegisterShell step={1}>
       <Box component="form" onSubmit={handleSubmit} sx={{ width: "100%", maxWidth: 620, mx: "auto" }}>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
-          <Box
-            sx={{
-              width: 42,
-              height: 42,
-              display: "grid",
-              placeItems: "center",
-              borderRadius: 1.5,
-              color: "#2444cf",
-              bgcolor: "#edf1ff",
-            }}
-          >
-            <AccountBalanceIcon />
-          </Box>
-          <Box>
-            <Typography variant="h5" sx={{ fontWeight: 800, color: "#17233d", lineHeight: 1.1 }}>
-              CashReady
-            </Typography>
-            <Typography variant="caption" sx={{ color: "#71809b", letterSpacing: 1.2 }}>
-              AI BANKING PLATFORM
-            </Typography>
-          </Box>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
+          <CashReadyLogo className="brand-lockup brand-lockup--auth" />
+          <Typography variant="caption" sx={{ color: "#71809b", letterSpacing: 1.2 }}>
+            AI BANKING PLATFORM
+          </Typography>
         </Box>
 
         <Typography variant="h4" sx={{ mt: 5, fontWeight: 800, color: "#17233d" }}>
