@@ -507,15 +507,16 @@ export default function Register() {
   }
 
   const visibilityToggle = (visible: boolean, onToggle: () => void, label: string) => (
-    <InputAdornment position="end" sx={{ ml: 0.5 }}>
+    <InputAdornment position="end" sx={{ ml: 0.5, height: "100%", maxHeight: "none", alignItems: "center" }}>
       <IconButton
         aria-label={visible ? `Hide ${label}` : `Show ${label}`}
         onClick={onToggle}
         edge="end"
+        size="small"
         sx={{
           color: "#5d6b82",
-          width: 22,
-          height: 22,
+          width: 40,
+          height: 40,
           p: 0,
           borderRadius: 1,
           "&:hover": {
