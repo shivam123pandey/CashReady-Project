@@ -28,7 +28,6 @@ export default function SiteHeader() {
       localStorage.removeItem("cashready_token");
       localStorage.removeItem("cashready_role");
       sessionStorage.removeItem("cashready_token");
-      setLoginOpen(false);
       navigate("/");
     }
   };
