@@ -6,7 +6,7 @@ import {
   Typography,
 } from "@mui/material";
 import { RefreshRounded } from "@mui/icons-material";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import {
   MapContainer,
@@ -35,7 +35,43 @@ type CashStatus = {
   message?: string;
 };
 
+type CashPrediction = {
+  cashPercent: number;
+  confidence: number;
+  likelySufficient: boolean;
+};
+
 const fallbackLocation: Coordinates = [26.8467, 80.9462];
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+// Mirrors predictCashAvailability in server/atmModel.mjs so estimates render instantly without a network round trip.
+function predictCashAvailability({ distanceKm, hour, dayOfWeek, atmId, requestedAmount, customerLimit }: {
+  distanceKm: number;
+  hour: number;
+  dayOfWeek: number;
+  atmId: number;
+  requestedAmount: number;
+  customerLimit: number;
+}): CashPrediction {
+  const normalizedDistance = clamp(distanceKm, 0, 8);
+  const peakDemand = hour >= 9 && hour <= 13 ? 13 : hour >= 17 && hour <= 21 ? 18 : 4;
+  const weekendDemand = dayOfWeek === 0 || dayOfWeek === 6 ? 7 : 0;
+  const terminalSignal = Math.abs(atmId) % 17;
+  const estimate = 86 - normalizedDistance * 4.2 - peakDemand - weekendDemand - terminalSignal * 0.35;
+  const confidence = clamp(0.58 + (8 - normalizedDistance) * 0.035, 0.58, 0.86);
+  const cashPercent = Math.round(clamp(estimate, 18, 96));
+  const amountRatio = requestedAmount / Math.max(customerLimit, 1);
+  const likelySufficient = amountRatio <= 1 && cashPercent * 1000 >= requestedAmount;
+
+  return {
+    cashPercent,
+    confidence: Number(confidence.toFixed(2)),
+    likelySufficient,
+  };
+}
 
 function straightLineDistanceKm(from: Coordinates, to: Coordinates) {
   const earthRadiusKm = 6371;
@@ -156,7 +192,6 @@ export default function MapView() {
     source: "cashready-api",
   });
   const [routePath, setRoutePath] = useState<Coordinates[]>([]);
-  const [cashPredictions, setCashPredictions] = useState<Record<number, { cashPercent: number; confidence: number; likelySufficient: boolean }>>({});
   const lastFetchedLocation = useRef<Coordinates | null>(null);
   const watchIdRef = useRef<number | null>(null);
 
@@ -408,21 +443,18 @@ export default function MapView() {
     return () => controller.abort();
   }, [selectedAtm]);
 
-  useEffect(() => {
-    if (!nearbyAtms.length) return;
-    const controller = new AbortController();
+  const cashPredictions = useMemo(() => {
     const requestedAmount = Number(localStorage.getItem("cashready_search_amount") ?? 0);
     const customerLimit = Number(localStorage.getItem("cashready_customer_limit") ?? 75000);
-    Promise.all(nearbyAtms.map(async (atm) => {
-      const params = new URLSearchParams({ lat: String(currentLocation[0]), lon: String(currentLocation[1]), atmLat: String(atm.location[0]), atmLon: String(atm.location[1]), atmId: String(atm.id), amount: String(requestedAmount), limit: String(customerLimit) });
-      const response = await fetch(`/api/atm/cash-predict?${params.toString()}`, { signal: controller.signal });
-      if (!response.ok) throw new Error("Cash prediction unavailable");
-      const data: { cashPercent: number; confidence: number; likelySufficient: boolean } = await response.json();
-      return [atm.id, data] as const;
-    })).then((predictions) => setCashPredictions(Object.fromEntries(predictions))).catch((error: Error) => {
-      if (error.name !== "AbortError") setCashPredictions({});
-    });
-    return () => controller.abort();
+    const now = new Date();
+    return Object.fromEntries(nearbyAtms.map((atm) => [atm.id, predictCashAvailability({
+      distanceKm: distanceFromCurrentLocation(atm, currentLocation),
+      hour: now.getHours(),
+      dayOfWeek: now.getDay(),
+      atmId: atm.id,
+      requestedAmount,
+      customerLimit,
+    })])) as Record<number, CashPrediction>;
   }, [currentLocation, nearbyAtms]);
 
   useEffect(() => {

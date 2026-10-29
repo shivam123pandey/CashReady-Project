@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: cashready
+    runtime: node
+    plan: free
+    branch: master
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: SESSION_TTL_MS
+        value: "28800000"
+      - key: API_RATE_LIMIT
+        value: "120"
+      - key: CORS_ORIGIN
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_VERIFY_SERVICE_SID
+        sync: false
+      - key: ATM_PROVIDER_URL
+        sync: false
+      - key: ATM_PROVIDER_API_KEY
+        sync: false
